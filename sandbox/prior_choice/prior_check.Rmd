@@ -1,0 +1,423 @@
+---
+title: "prior_check"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Model goal
+
+Measure the difference between two conditions, for each subject.
+
+The likelihood for the model is always.
+
+$$
+\begin{aligned}
+\mathrm{-likelihood-} \\
+error_i &\sim (1-p\_guess_i)*VM(0, \kappa_i) + (p\_guess_i)*Unif(0,2\pi) \\
+\\
+\mathrm{-param~transformation-} \\
+\kappa_i &= sd2k(circ\_sd_i) \\
+\end{aligned}
+$$
+
+The centered parameterization of the linear model would be:
+
+$$
+\begin{aligned}
+\mathrm{-linear~model-} \\
+circ\_sd_i &= exp(\alpha_{0,SUBJ[i]} + \alpha_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-log~link~on~sd-} \\
+p\_guess_i &= inv\_logit(\beta_{0,SUBJ[i]} + \beta_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-logit~link~on~p\_guess-} \\
+\\
+\mathrm{-priors:~all~independent-}\\
+\alpha_{0,SUBJ[...]} &\sim Normal(mu\_\alpha_0, sigma\_\alpha_0) \\
+\alpha_{\Delta,SUBJ[...]} &\sim Normal(mu\_\alpha_{\Delta}, sigma\_\alpha_{\Delta}) \\
+\beta_{0,SUBJ[...]} &\sim Normal(mu\_\beta_0, sigma\_\beta_0) \\
+\beta_{\Delta,SUBJ[...]} &\sim Normal(mu\_\beta_{\Delta}, sigma\_\beta_{\Delta}) \\
+\\
+mu\_\alpha_0 &\sim dist(?)\\
+sigma\_\alpha_0 &\sim dist(?) \\
+mu\_\alpha_{\Delta} &\sim dist(?)\\
+sigma\_\alpha_{\Delta} &\sim dist(?)\\
+mu\_\beta_0 &\sim dist(?)\\
+sigma\_\beta_0 &\sim dist(?)\\
+mu\_\beta_{\Delta} &\sim dist(?)\\
+sigma\_\beta_{\Delta} &\sim dist(?)\\
+\end{aligned}
+$$
+
+The actual model I'll fit, the non-centered parameterization in `brms`, will look more like:
+
+$$
+\begin{aligned}
+\mathrm{-linear~model-} \\
+circ\_sd_i &= exp(\alpha_1 + \alpha_{1,SUBJ[i]} + (\alpha_2 + \alpha_{2,SUBJ[i]}) * postCond) ~~ \mathrm{-log~link~on~sd-} \\
+p\_guess_i &= inv\_logit(\beta_1 + \beta_{1,SUBJ[i]} + (\beta_2 + \beta_{2,SUBJ[i]}) * postCond) ~~ \mathrm{-logit~link~on~p\_guess-} \\
+\\
+\mathrm{-priors:~all~independent-}\\
+\alpha_{1,SUBJ[...]} &\sim Normal(0, sigma\_\alpha_1) \\
+\alpha_{2,SUBJ[...]} &\sim Normal(0, sigma\_\alpha_2) \\
+\beta_{1,SUBJ[...]} &\sim Normal(0, sigma\_\beta_1) \\
+\beta_{2,SUBJ[...]} &\sim Normal(0, sigma\_\beta_2) \\
+\\
+\alpha_1 &\sim dist(?)\\
+sigma\_\alpha_1 &\sim dist(?) \\
+\alpha_2 &\sim dist(?)\\
+sigma\_\alpha_2 &\sim dist(?)\\
+\beta_1 &\sim dist(?)\\
+sigma\_\beta_1 &\sim dist(?)\\
+\beta_2 &\sim dist(?)\\
+sigma\_\beta_2 &\sim dist(?)\\
+\end{aligned}
+$$
+
+I've kept the sigma parameters in the prior notation, when really they should be moved to the linear model and the priors set to $Normal(0,1)$.
+
+
+The purpose of this document is to figure out reasonable values for those priors, both super uninformative and weakly informative.
+
+
+##### Priors on slope and intercept with log link
+
+I know that circ_sd should stay between ~20 and ~180. This would be very weakly informative. 
+
+
+```{r}
+
+library(tidyverse)
+library(Rfast)
+library(pracma) #rad2deg conversions
+library(cowplot)
+library(sn)
+
+theme_set(theme_cowplot())
+
+my_deg2rad <- function(d){
+  #π/180°
+  return(d * (pi/180))
+}
+my_deg2rad_vec <- Vectorize(my_deg2rad)
+
+#helper functions
+sd2k <- function(sd_input) {
+  
+  #sd_input needs to be radians
+
+  #original matlab code
+  # R <- exp(-S.^2/2);
+  # K = 1./(R.^3 - 4 * R.^2 + 3 * R);
+  # K(R < 0.85) = -0.4 + 1.39 * R(R < 0.85) + 0.43./(1 - R(R < 0.85));
+  # K(R < 0.53) = 2 * R(R < 0.53) + R(R < 0.53).^3 + (5 * R(R < 0.53).^5)/6;
+
+  R <- exp(-(sd_input^2)/2)
+  K <- 1/((R^3) - (4 * R^2) + (3*R))
+  
+  if(R < 0.85){
+    K <- -0.4 + (1.39 * R) + (0.43/(1-R))
+  }
+  
+  if(R < 0.53){
+    K <- (2 * R) + R^3 + (5 * R^5)/6
+  }
+  
+
+  return(K)
+}
+sd2k_vec <- Vectorize(sd2k)
+
+#helper functions
+sim_vm <- function(k){
+  res <- Rfast::rvonmises(1, pi, k, rads = TRUE)
+  return(res[1])
+}
+sim_vm_vec <- Vectorize(sim_vm)
+
+```
+
+```{r}
+#double check helper func
+
+convert_func <- 
+  tibble("sd" = seq(0, 10, by = 0.1)) %>%
+  mutate("k" = sd2k_vec(sd))
+
+ggplot(convert_func, aes(x = sd, y = k)) + 
+  geom_point() + 
+  labs(subtitle = "sd2k_vec")
+```
+```{r}
+convert_func <- 
+  tibble("deg" = seq(-720, 720, by = 1)) %>%
+  mutate("rad_cz" = my_deg2rad_vec(deg), "rad" = deg2rad(deg))
+
+p1 <- ggplot(convert_func, aes(x = deg, y = rad)) + geom_point()
+p2 <- ggplot(convert_func, aes(x = deg, y = rad_cz)) + geom_point()
+plot_grid(p1, p2)
+```
+
+
+```{r}
+
+#reminder of how log link transforms values from parameter space
+
+log_link_func <- 
+  tibble("input" = seq(-5, 5, by = 0.1)) %>%
+  mutate("output" = exp(input))
+
+ggplot(log_link_func, aes(x = input, y = output)) + 
+  geom_point()
+
+```
+
+Placing too much mass below zero in link-space will place loads of mass at zero in de-linked space.
+
+For example a uniform prior $Unif(-5, 5)$ results in a pile of mass on zero.
+
+```{r}
+
+unif_prior_sim <- 
+  tibble("unif_draws" = runif(1e4, -5, 5)) %>%
+  mutate("exp_output" = exp(unif_draws))
+
+ggplot(unif_prior_sim, aes(x = exp_output)) + 
+  geom_histogram(binwidth = 2)
+
+```
+
+Try a normal prior
+
+```{r fig.height=5}
+lnorm_prior_sim <-
+  tibble("prior" = rnorm(5e4, 4, 0.5)) %>%
+  mutate(log_link_prior = exp(prior), log_link_prior_k = sd2k_vec(deg2rad(log_link_prior)), implied_data_rad = map(log_link_prior_k, sim_vm)) %>%
+  unnest(implied_data_rad)
+
+hist_quantile <- round(quantile(lnorm_prior_sim$prior, c(0.05, 0.95)), 2)
+prior_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = prior)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+hist_quantile <- round(quantile(lnorm_prior_sim$log_link_prior, c(0.05, 0.95)), 2)
+delink_prior_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = log_link_prior)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+prior_cdf <- 
+  ggplot(lnorm_prior_sim, aes(x = log_link_prior)) + 
+  stat_ecdf() + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 300)) 
+  #geom_histogram(binwidth = 1)
+
+data_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = implied_data_rad)) + 
+  geom_histogram(binwidth = 0.1) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  coord_cartesian(xlim=c(0, 2*pi)) 
+  
+
+plot_grid(prior_hist, delink_prior_hist, prior_cdf, data_hist, ncol = 1, align = "v")
+```
+
+
+Try a skew-normal prior
+
+```{r fig.height=5}
+lnorm_prior_sim <-
+  tibble("prior" = rsn(5e4, 5, 1, -15)) %>%
+  mutate(log_link_prior = exp(prior), log_link_prior_k = sd2k_vec(deg2rad(log_link_prior)), implied_data_rad = map(log_link_prior_k, sim_vm)) %>%
+  unnest(implied_data_rad)
+
+hist_quantile <- round(quantile(lnorm_prior_sim$prior, c(0.05, 0.95)), 2)
+prior_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = prior)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+hist_quantile <- round(quantile(lnorm_prior_sim$log_link_prior, c(0.05, 0.95)), 2)
+delink_prior_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = log_link_prior)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+prior_cdf <- 
+  ggplot(lnorm_prior_sim, aes(x = log_link_prior)) + 
+  stat_ecdf() + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 300)) 
+  #geom_histogram(binwidth = 1)
+
+data_hist <- 
+  ggplot(lnorm_prior_sim, aes(x = implied_data_rad)) + 
+  geom_histogram(binwidth = 0.1) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  coord_cartesian(xlim=c(0, 2*pi)) 
+
+plot_grid(prior_hist, delink_prior_hist, prior_cdf, data_hist, ncol = 1, align = "v")
+```
+
+
+Check prior on change in post condition.
+
+```{r fig.height = 7}
+
+norm_prior_sim <-
+  tibble("prior_pre" = rnorm(5e4, 4, 0.5), "prior_post" = rnorm(5e4, 0, 0.5)) %>%
+  mutate(summed_post = prior_pre + prior_post) %>%
+  mutate(log_link_prior_pre = exp(prior_pre),
+         log_link_prior_summed_post = exp(summed_post),
+         log_link_prePost_diff = log_link_prior_summed_post - log_link_prior_pre)
+  #        log_link_prior_k_pre = sd2k_vec(deg2rad(log_link_prior_pre)),
+  #        log_link_prior_k_post = sd2k_vec(deg2rad(log_link_prior_summed_post)),
+  #        implied_pre_data_rad = map(log_link_prior_k_pre, sim_vm),
+  #        implied_post_data_rad = map(log_link_prior_k_post, sim_vm)) %>%
+  # unnest(implied_pre_data_rad, implied_post_data_rad)
+
+#plot prior preCond hist in link space
+hist_quantile <- round(quantile(norm_prior_sim$prior_pre, c(0.05, 0.95)), 2)
+pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = prior_pre)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+#plot prior preCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_pre, c(0.05, 0.95)), 2)
+delink_pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prior_pre)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+
+#plot prior postCond hist in linked space
+hist_quantile <- round(quantile(norm_prior_sim$summed_post, c(0.05, 0.95)), 2)
+post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = summed_post)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+#plot prior postCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_summed_post, c(0.05, 0.95)), 2)
+delink_post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prior_summed_post)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+
+
+#plot prior postCond-preCond diff in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prePost_diff, c(0.05, 0.95)), 2)
+delinked_prePost_diff_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prePost_diff)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(-150, 150)) 
+
+
+plot_grid(pre_prior_hist, delink_pre_prior_hist, post_sum_prior_hist, delink_post_sum_prior_hist, delinked_prePost_diff_hist, ncol = 1, align = "v")
+
+```
+
+Notes:
+
+skew-normal is a little unnecessary.
+
+good prior on group mean =  Normal(4, 0.5).
+
+good prior on group delta = Normal(0, 0.5). Potentially constrain it to 0.3
+
+
+Now check prior on p_mem difference
+
+prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+
+prior(normal(0, 1.5), class = "b", coef = "stimulation", dpar = "theta")
+
+
+```{r fig.height = 7}
+
+norm_prior_sim <-
+  tibble("prior_pre" = rnorm(5e4, 0, 1.5), "prior_post" = rnorm(5e4, 0, 1.5)) %>%
+  mutate(summed_post = prior_pre + prior_post) %>%
+  mutate(logit_link_prior_pre = exp(prior_pre)/(1 + exp(prior_pre)),
+         logit_link_prior_summed_post = exp(summed_post)/(1 + exp(summed_post)),
+         logit_link_prePost_diff = logit_link_prior_summed_post - logit_link_prior_pre)
+  #        log_link_prior_k_pre = sd2k_vec(deg2rad(log_link_prior_pre)),
+  #        log_link_prior_k_post = sd2k_vec(deg2rad(log_link_prior_summed_post)),
+  #        implied_pre_data_rad = map(log_link_prior_k_pre, sim_vm),
+  #        implied_post_data_rad = map(log_link_prior_k_post, sim_vm)) %>%
+  # unnest(implied_pre_data_rad, implied_post_data_rad)
+
+#plot prior preCond hist in link space
+hist_quantile <- round(quantile(norm_prior_sim$prior_pre, c(0.05, 0.95)), 2)
+pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = prior_pre)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(-5, 5)) 
+
+#plot prior preCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$logit_link_prior_pre, c(0.05, 0.95)), 2)
+delink_pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = logit_link_prior_pre)) + 
+  geom_histogram(binwidth = 0.01) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 1)) 
+
+
+#plot prior postCond hist in linked space
+hist_quantile <- round(quantile(norm_prior_sim$summed_post, c(0.05, 0.95)), 2)
+post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = summed_post)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(-5, 5)) 
+
+#plot prior postCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$logit_link_prior_summed_post, c(0.05, 0.95)), 2)
+delink_post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = logit_link_prior_summed_post)) + 
+  geom_histogram(binwidth = 0.01) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 1)) 
+
+
+
+#plot prior postCond-preCond diff in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$logit_link_prePost_diff, c(0.05, 0.95)), 2)
+delinked_prePost_diff_hist <- 
+  ggplot(norm_prior_sim, aes(x = logit_link_prePost_diff)) + 
+  geom_histogram(binwidth = 0.01) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(-1, 1)) 
+
+
+plot_grid(pre_prior_hist, delink_pre_prior_hist, post_sum_prior_hist, delink_post_sum_prior_hist, delinked_prePost_diff_hist, ncol = 1, align = "v")
+```
+
+the prePost difference can only be made more uniform by setting one of the two condition distributions to be highly skewed towards extreme ends.

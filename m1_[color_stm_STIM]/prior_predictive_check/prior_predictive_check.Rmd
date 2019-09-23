@@ -1,0 +1,458 @@
+---
+title: "prior_predictive_check"
+output: html_document
+css: style.css
+---
+
+```{r}
+library(tidyverse)
+library(glue)
+library(tidybayes)
+library(cowplot)
+library(scales)
+
+theme_set(theme_cowplot())
+
+load_existing_sim <- TRUE
+```
+
+
+I'm starting this prior check with the work I've already done in the sandbox. In those scripts I already got a sense of what weakly informative priors for my starting model might be. In those files, I only did a visual inspection of the prior predictive distribution, not neccesarily including any summary statistics. I also did not do any sort of checks based on the sample size of the small design I have.
+
+Written down the model is:
+
+$$
+\begin{aligned}
+\mathrm{-likelihood-} \\
+error_i &\sim (1-p\_guess_i)*VM(0, \kappa_i) + (p\_guess_i)*Unif(0,2\pi) \\
+\\
+\mathrm{-param~transformation-} \\
+\kappa_i &= sd2k(circ\_sd_i) \\
+\\
+\mathrm{-linear~model-} \\
+circ\_sd_i &= exp(\alpha_{0,SUBJ[i]} + \alpha_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-log~link~on~sd-} \\
+p\_guess_i &= inv\_logit(\beta_{0,SUBJ[i]} + \beta_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-logit~link~on~p\_guess-} \\
+\\
+\mathrm{-priors:~all~independent-}\\
+\alpha_{0,SUBJ[...]} &\sim Normal(mu\_\alpha_0, sigma\_\alpha_0) \\
+\alpha_{\Delta,SUBJ[...]} &\sim Normal(mu\_\alpha_{\Delta}, sigma\_\alpha_{\Delta}) \\
+\beta_{0,SUBJ[...]} &\sim Normal(mu\_\beta_0, sigma\_\beta_0) \\
+\beta_{\Delta,SUBJ[...]} &\sim Normal(mu\_\beta_{\Delta}, sigma\_\beta_{\Delta}) \\
+\\
+mu\_\alpha_0 &\sim Normal(4, 0.5)\\
+sigma\_\alpha_0 &\sim Normal^+(0, 0.5) \\
+mu\_\alpha_{\Delta} &\sim Normal(0, 0.5)\\
+sigma\_\alpha_{\Delta} &\sim Normal^+(0, 0.5)\\
+mu\_\beta_0 &\sim Normal(0, 1.5)\\
+sigma\_\beta_0 &\sim Normal^+(0, 1.5)\\
+mu\_\beta_{\Delta} &\sim Normal(0, 1)\\
+sigma\_\beta_{\Delta} &\sim Normal^+(0, 1)\\
+\end{aligned}
+$$
+
+------
+
+I am considering the color stimulation data. samples sizes:
+
+```{r}
+
+obs_data <- read_csv('../data/stimulation_obvs.csv')
+
+#summarize subj num, obs count, and obs condition split
+(subj_summary <- obs_data %>%
+  group_by(subj_index) %>%
+  summarise(n_obs = n(), frac_stim = mean(stimulation)))
+
+
+```
+
+2 subjs with 252 observations each, 126 per condition. 
+
+9/12 - I am thinking I should simulate varying effects using the actual samples sizes I have. I also think that this shouldnt matter (at least for a model like this). I'll also try with a larger number of subjects.
+
+
+```{r}
+
+nsubj_sim <- 15
+nobs_per_cond_sim <- 126
+
+```
+
+------
+
+Simulation functions
+
+```{r}
+
+# this function takes a single set of parameters and covariates and simlates an observation from the mixture model
+simulateData_likelihood <- function(subj_alpha0,
+                                    subj_alphaD,
+                                    subj_beta0, 
+                                    subj_betaD,
+                                    stimulation){
+  
+    # calculate the delinked mixing proportion
+    pMem_linked <- subj_beta0 + (subj_betaD * stimulation)
+    pMem <- exp(pMem_linked)/(1 + exp(pMem_linked))
+  
+    # which part of the mixture does this obs come from
+    memFlip <- rbernoulli(1, pMem)
+    
+    obs <- NA
+    
+    if (memFlip == 1){
+      obs <- Rfast::rvonmises(1, pi, exp(subj_alpha0 + (subj_alphaD*stimulation))) - pi
+    }else{    
+      obs <- runif(1, -pi, pi)
+    }
+    
+    obs_tibble <- tibble(obs_radian = obs, obs_degree = pracma::rad2deg(obs))
+    
+    return(obs_tibble)   
+  
+}
+
+simulateData_subj <- function(subj_alpha0, subj_alphaD, subj_beta0, subj_betaD, nobs_per_condition){
+  
+    conditions <- c(0,1)
+    
+    subj_data <- tibble(
+      subj_alpha0 = subj_alpha0,
+      subj_alphaD = subj_alphaD,
+      subj_beta0 = subj_beta0,
+      subj_betaD = subj_betaD,
+      stimulation = rep(conditions, each = nobs_per_condition)
+    )
+  
+    subj_data <- subj_data %>% 
+      mutate(subj_obs = pmap(subj_data, simulateData_likelihood)) %>%
+      select(-c(subj_alpha0, subj_alphaD, subj_beta0, subj_betaD)) %>%
+      unnest(subj_obs)
+    
+    return(subj_data)
+}
+# 
+# # this function will take a single set of simulated parameter draws and then simulate an implied data set
+# simulateData <- function(sim_num, 
+#                          alpha0_mu, alpha0_sigma,
+#                          alphaD_mu, alphaD_sigma,
+#                          beta0_mu, beta0_sigma,
+#                          betaD_mu, betaD_sigma,
+#                          nsubj = 100, nobs_per_condition = 100){
+#   
+#   # generate lower level subject-specific parameters
+#   sim_subj_alpha0 <- rnorm(nsubj, alpha0_mu, alpha0_sigma)
+#   sim_subj_alphaD <- rnorm(nsubj, alphaD_mu, alphaD_sigma)
+#   
+#   sim_subj_beta0 <- rnorm(nsubj, beta0_mu, beta0_sigma)
+#   sim_subj_betaD <- rnorm(nsubj, betaD_mu, betaD_sigma)
+#   
+#   sim_data <- tibble(
+#          subj = rep(1:nsubj, each = nobs_per_condition * 2),
+#          subj_alpha0 = rep(sim_subj_alpha0, each = nobs_per_condition * 2),
+#          subj_alphaD = rep(sim_subj_alphaD, each = nobs_per_condition * 2),
+#          subj_beta0 = rep(sim_subj_beta0, each = nobs_per_condition * 2),
+#          subj_betaD = rep(sim_subj_betaD, each = nobs_per_condition * 2),
+#          stimulation = rep(rep(c(0,1), times = nobs_per_condition), times = nsubj)
+#          )
+#   
+#   sim_data <- sim_data %>%
+#     mutate(obs = pmap(sim_data %>% select(-subj), simulateData_likelihood)) %>%
+#     unnest(obs)
+#     
+#   
+#   return(sim_data)
+# }
+
+# this function will take a single set of simulated parameter draws and then simulate an implied data set
+simulateData <- function(sim_num, 
+                         alpha0_mu, alpha0_sigma,
+                         alphaD_mu, alphaD_sigma,
+                         beta0_mu, beta0_sigma,
+                         betaD_mu, betaD_sigma,
+                         nsubj = 100, nobs_per_condition = 100){
+  
+  print(glue("simulation: {sim_num}"))
+  
+  # generate lower level subject-specific parameters
+  sim_subj_alpha0 <- rnorm(nsubj, alpha0_mu, alpha0_sigma)
+  sim_subj_alphaD <- rnorm(nsubj, alphaD_mu, alphaD_sigma)
+  
+  sim_subj_beta0 <- rnorm(nsubj, beta0_mu, beta0_sigma)
+  sim_subj_betaD <- rnorm(nsubj, betaD_mu, betaD_sigma)
+  
+  sim_data <- tibble(
+         subj = 1:nsubj,
+         subj_alpha0 = sim_subj_alpha0,
+         subj_alphaD = sim_subj_alphaD,
+         subj_beta0 = sim_subj_beta0,
+         subj_betaD = sim_subj_betaD,
+         nobs_per_condition = nobs_per_condition
+         )
+  
+  sim_data <- sim_data %>% 
+    mutate(subj_obs = pmap(sim_data %>% select(-subj), simulateData_subj))
+  
+  return(sim_data)
+}
+
+
+  
+```
+
+Simulate
+
+```{r}
+
+found_existing_sim <- FALSE
+if (file.exists("sim_datasets.rds")){
+  found_existing_sim <- TRUE
+}
+
+
+if (load_existing_sim == FALSE || found_existing_sim == FALSE){
+
+  nsim_datasets <- 1000
+  
+  sim_priors <- tibble(
+    sim_num = 1:nsim_datasets,
+    alpha0_mu = rnorm(nsim_datasets, 4, 0.5),
+    alpha0_sigma = abs(rnorm(nsim_datasets, 0, 0.5)),
+    alphaD_mu =  rnorm(nsim_datasets, 0, 0.5),
+    alphaD_sigma = abs(rnorm(nsim_datasets, 0, 0.5)),
+    beta0_mu = rnorm(nsim_datasets, 0, 1.5),
+    beta0_sigma = abs(rnorm(nsim_datasets, 0, 1.5)),
+    betaD_mu = rnorm(nsim_datasets, 0, 1),
+    betaD_sigma = abs(rnorm(nsim_datasets, 0, 1)),
+    nsubj = nsubj_sim,
+    nobs_per_cond = nobs_per_cond_sim
+  )
+  
+  sim_datasets <- sim_priors %>%
+    mutate(dataset = pmap(sim_priors, simulateData))
+  
+  saveRDS(sim_datasets, file = "sim_datasets.rds")
+
+}else{
+  
+  sim_datasets <- readRDS("sim_datasets.rds")
+}
+
+head(sim_datasets)
+
+```
+
+```{r}
+head(sim_datasets$dataset[[1]])
+```
+
+```{r}
+head(sim_datasets$dataset[[1]]$subj_obs[[1]])
+```
+
+
+------
+
+Plot distributions and summary statistics
+
+Definitely plot the priors on the intercept and slope means, transformed back into sd 
+
+plot the prior predicitive densities for subjects
+
+Some other plot ideas:
+
+shaded histogram plot, combining data across stimulation conditions - check if data looks too peaked or too flat
+
+shaded histogram plot, one for each stimulation condition - same check ^
+
+plot of density lines, one from each sim dataset, one with both conditions and one with them split out - this would help identify weird distribution more that shaded histogram perhaps
+
+
+#### Prior distribution on von-mises circSD, linear model parameters (pre group mean, post group mean, post-pre mean change)
+
+No accounting for subject variance here
+
+```{r, fig.width=10, fig.height=6}
+
+##
+## alpha0_mu 
+##
+
+## linked prior distribution
+alpha0_mu_hist <- sim_datasets %>%
+  ggplot(aes(x = alpha0_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#F16C66") +
+  theme(legend.position = "none",
+        axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  labs(x = "linked prior on group mean for circSD, pre condition",
+       title = "circSD group mean prior, alpha0_mu") + 
+  scale_x_continuous(limits = c(1,7))
+  
+
+##
+## alpha0_mu + alphaD_mu = alpha1_mu 
+##
+
+## linked prior distribution
+alpha1_mu_hist <- sim_datasets %>%
+  transmute(alpha1_mu = alpha0_mu + alphaD_mu) %>%
+  ggplot(aes(x = alpha1_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#685369") +
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) +
+  labs(x = "linked prior on group mean for circSD, post condition",
+       title = "circSD group mean prior, alpha0_mu + alphaD_mu") + 
+  scale_x_continuous(limits = c(1,7))
+
+
+plot_grid(alpha0_mu_hist, alpha1_mu_hist, nrow = 1, align = "h")
+
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+##
+## alpha0_mu 
+##
+
+## delinked prior alpha0_mu
+alpha0_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu)) %>%
+  summarise(less_than_5 = sum(delinked < 5)/n(), greater_than_120 = sum(delinked > 120)/n())
+
+alpha0_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu)) %>%
+  ggplot(aes(x = delinked)) +
+  geom_histogram(binwidth = 2, fill = "#F16C66") + 
+  geom_vline(xintercept = c(5, 120), linetype = "dashed") + 
+  labs(x = "prior on group mean for circSD, pre condition",
+       title = "circSD group mean prior, exp(alpha0_mu)",
+       subtitle = glue("prob(circSD < 5) = {alpha0_mu_delinked_stats$less_than_5}\nprob(circSD > 120) = {alpha0_mu_delinked_stats$greater_than_120}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) 
+  
+##
+## alpha0_mu + alphaD_mu = alpha1_mu 
+##  
+  
+## delinked prior alpha0_mu + alphaD_mu
+alpha1_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 2, fill = "#685369") + 
+  labs(x = "prior on group mean for circSD, post condition",
+       title = "circSD group mean prior, exp(alpha0_mu + alphaD_mu)") + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12))
+
+
+plot_grid(alpha0_mu_delinked_hist, alpha1_mu_delinked_hist, nrow = 1, align = "h")
+```
+
+```{r fig.width=10, fig.height=6}
+
+##
+## exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu) plot
+##
+
+alphaD_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)) %>%
+  summarise(less_than_n100 = sum(delinked < -100)/n(), greater_than_100 = sum(delinked > 100)/n())
+
+alphaD_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 2, fill = "#00AEB2") + 
+  geom_vline(xintercept = c(-100, 100), linetype = "dashed") + 
+  labs(x = "prior on group mean for delta-circSD, mean post minus mean pre",
+       title = "delta-circSD group mean prior, exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)",
+       subtitle = glue("prob(delta-circSD < -100) = {alphaD_mu_delinked_stats$less_than_n100}\nprob(delta-circSD > 100) = {alphaD_mu_delinked_stats$greater_than_100}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  scale_x_continuous(breaks= pretty_breaks(10))
+
+alphaD_mu_delinked_hist
+```
+
+#### Prior predicitive distribution on subject effects on circSD (based on simulated subjects from each dataset)
+
+These plots indicate the effects of the priors on `alpha0_mu`, `alpha0_sigma`, `alphaD_mu`, `alphaD_sigma`.
+
+```{r}
+
+sim_subj_circSD_hist_count <- function(dataset, max_val = 120){
+  
+  pre_circSD <- exp(dataset$subj_alpha0)
+  post_circSD <- exp(dataset$subj_alpha0 + dataset$subj_alphaD)
+  
+  pre_circSD[pre_circSD > max_val] <- max_val
+  post_circSD[post_circSD > max_val] <- max_val
+  
+  breaks <- seq(0, ceiling(max(c(pre_circSD, post_circSD)) / 10 ) * 10 ,10)
+  
+  pre_circSD_bincount <- hist(pre_circSD, breaks = breaks, plot = FALSE)$counts
+  post_circSD_bincount <- hist(post_circSD, breaks = breaks, plot = FALSE)$counts
+  
+  pre_circSD_bincount_names <- glue("pre_circSD_c{breaks[-1]}")
+  post_circSD_bincount_names <- glue("post_circSD_c{breaks[-1]}")
+  
+  bincounts <- tibble(ct = c(pre_circSD_bincount, post_circSD_bincount), 
+                      ct_name = c(pre_circSD_bincount_names, post_circSD_bincount_names))
+
+  return(bincounts)
+  
+}
+
+
+
+sim_datasets %>% 
+  transmute(subj_hist_counts = map(dataset, sim_subj_circSD_hist_count)) %>% 
+  unnest(subj_hist_counts) %>% 
+  mutate_if(is.na(ct), 0, ct) %>%
+  spead(ct_name, ct) %>%
+  head()
+  
+```
+
+
+
+```{r fig.width=10, fig.height=6}
+
+sim_subj_extremes <- sim_datasets %>% 
+  unnest(dataset) %>%
+  mutate(subj_alpha1 = subj_alpha0 + subj_alphaD, 
+         subj_alpha0_delinked = exp(subj_alpha0), 
+         subj_alpha1_delinked = exp(subj_alpha1)) %>%
+  group_by(sim_num) %>%
+  summarize_at(vars(subj_alpha0_delinked, subj_alpha1_delinked), list(max = max, min = min)) 
+  
+
+
+#What is the most extreme (min/max) subject pre condition value in each dataset
+
+sim_subj_extremes %>%
+  mutate(subj_alpha0_delinked_max = if_else(subj_alpha0_delinked_max > 120, 120, subj_alpha0_delinked_max),
+         subj_alpha1_delinked_max = if_else(subj_alpha1_delinked_max > 120, 120, subj_alpha1_delinked_max)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha0_delinked_max, fill = "red", alpha = 0.3), binwidth = 5) + 
+  geom_histogram(aes(x = subj_alpha1_delinked_max, fill = "blue", alpha = 0.3), binwidth = 5) + 
+  theme(legend.position = "none")
+
+#What is the most extreme subject post condition value in each dataset
+
+
+#What is the most extreme change from pre to post
+```
+
+```{r}
+sim_subj_extremes %>%
+  mutate(subj_alpha0_delinked_min = if_else(subj_alpha0_delinked_min > 120, 120, subj_alpha0_delinked_min),
+         subj_alpha1_delinked_min = if_else(subj_alpha1_delinked_min > 120, 120, subj_alpha1_delinked_min)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha0_delinked_min, fill = "red", alpha = 0.3), binwidth = 5) + 
+  geom_histogram(aes(x = subj_alpha1_delinked_min, fill = "blue", alpha = 0.3), binwidth = 5) + 
+  theme(legend.position = "none")
+```
+

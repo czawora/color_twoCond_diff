@@ -1,0 +1,38 @@
+---
+title: "model_expansion_notes"
+output: html_document
+---
+
+#### What am I doing?
+
+The idea of the following document is to help me organize my thoughts as I attempt to implement this two condition, multi-level model while following the steps of the Bayesian workflow.
+
+
+My intention for the layout of this folder is that, in addition to this document, there are at first two other folders, `sandbox/` and `data_summary/`. `sandbox/` is intended to contain any exploration of how I would implement a part of the workflow. One-off scripts that I use to flush out intermediary steps or hiccups I encounter while trying to get something to work. `data_summary/` will contain any scripts I use to explore the data, without any Bayesian inferential modeling.
+
+
+All the other folders should be different models I iterate upon. Each folder would contain subfolders that match steps in the workflow:
+
+* Prior predictive check
+
+* Simulation based calibration (computational faithfulness) - would involve biowulf
+
+* Parameter recovery (Model sensitivity) - would involve biowulf
+
+* Model fitting
+
+* Posterior predictive check + Bayes Factors + CV (Model accuracy)
+
+
+As I am going along these steps for any given model (model = likelihood + prior + design + sample size) I might encounter that I need to change the model (change the priors or the likelihood based on pre-fit checks OR expanding the model based on model accuracy checks OR the design has change and I have new conditions or more samples). Once I decide to modify the model I will make a new folder where I will start repeating the steps for the modified model. 
+
+For example, I would begin with a folder `m1/` that would be the initial modeling attempt. At any point in the workflow when I decide I need to change the model, I would create a new folder `m2/` and begin again. I should also try to make notes in this file to help keep track of the transitions between models.
+
+-----
+
+#### Model expansion history
+
+m1 - the model I already started concocting before arranging this workflow structure. A linear model on the VM uniform mixture parameters kappa and pMem. Varying effcts for subjects on the pre condition intercept and pre-post slope. Kappa LM is log linked and the the pMem LM is logit linked. I already came up with a set of initial weakly informative priors. 
+
+the data for this particular version of the model is from the stimulation color short term memory task. 
+...

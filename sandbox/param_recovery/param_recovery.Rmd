@@ -1,0 +1,227 @@
+---
+title: "param_recovery"
+output: html_document
+---
+
+```{r}
+library(cowplot)
+library(rstan)
+library(brms)
+library(shinystan)
+library(pracma)
+library(tidybayes)
+
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+theme_set(theme_tidybayes() + panel_border())
+```
+
+
+Define the brms m1 model
+
+```{r}
+
+#definition
+vm_uniform_mix <- custom_family(
+  "vm_uniform_mix", 
+  dpars = c("mu", "circSD", "theta", "a", "b"),
+  links = c("identity", "log", "logit", "identity", "identity"), 
+  lb = c(NA, 0, 0, NA, NA),
+  ub = c(NA, NA, 1, NA, NA),
+  type = "real" # response type
+)
+
+# fill in functions needed to density evaluation and rng
+stan_funs <- "
+
+  real deg2rad( real d){
+    return(d * (pi()/180));
+  }
+
+  real sd2k( real sd_input) {
+  
+    //sd_input needs to be radians
+
+    //original matlab code
+    // R <- exp(-S.^2/2);
+    // K = 1./(R.^3 - 4 * R.^2 + 3 * R);
+    // K(R < 0.85) = -0.4 + 1.39 * R(R < 0.85) + 0.43./(1 - R(R < 0.85));
+    // K(R < 0.53) = 2 * R(R < 0.53) + R(R < 0.53).^3 + (5 * R(R < 0.53).^5)/6;
+
+    real R;
+    real K;
+
+    R = exp(-(sd_input^2)/2);
+    K = 1/((R^3) - (4 * R^2) + (3*R));
+  
+    if(R < 0.85){
+      K = -0.4 + (1.39 * R) + (0.43/(1-R));
+    }
+  
+    if(R < 0.53){
+      K = (2 * R) + R^3 + (5 * R^5)/6;
+    }
+
+    return(K);
+  }
+
+  real vm_uniform_mix_lpdf(real y, real mu, real circSD, real theta, real a, real b) {
+    
+   
+   real kappa = sd2k(deg2rad(circSD));
+
+
+   //* for kappa > 100 the normal approximation is used
+   //* for reasons of numerial stability
+
+    if (kappa > 100){
+
+    return log_mix( theta ,
+                    normal_lpdf(y | mu, sqrt(1/kappa)),
+                    uniform_lpdf(y | a, b));
+
+    } else {
+
+    return log_mix( theta ,
+                    von_mises_lpdf(y | mu, kappa),
+                    uniform_lpdf(y | a, b));
+    }
+  }
+
+  real vm_uniform_mix_rng(real mu, real circSD, real theta, real a, real b) {
+    
+    int flip = bernoulli_rng(theta);
+    
+    real phi;
+
+    if (flip == 1){
+      phi = von_mises_rng(mu, sd2k(deg2rad(circSD)));
+    }else{
+      phi = uniform_rng(a, b);
+    }
+
+    return(phi);
+
+  }
+"
+stanvars <- stanvar(scode = stan_funs, block = "functions")
+
+
+# data 
+color_stim <- read_csv("/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/sandbox/param_recovery/stimulation_obvs.csv") %>%
+  mutate(error_deg = error, error = deg2rad(error))
+
+# fitting
+bform <- bf(error ~ 0, #formula for first parameter mu
+            circSD ~ 0 + intercept + stimulation + (1 + stimulation || subj_index),
+            theta ~ 0 + intercept + stimulation + (1 + stimulation || subj_index), 
+            a = -pi, 
+            b = pi,
+            family = vm_uniform_mix)
+
+get_prior(bform, color_stim)
+bprior <- prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+          prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+          prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+          prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+          prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+          prior(normal(0, 1.5), class = "b", coef = "stimulation", dpar = "theta") +
+          prior(normal(0, 1), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+          prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+          
+
+
+#make_stancode(bform, color_stim, stanvars = stanvars)
+
+
+# print(fit)
+# #plot(fit)
+# np <- nuts_params(fit)
+# pairs(fit , pars = parnames(fit) %>% select(-lp__), np = np,  np_style = pairs_style_np(div_color = "firebrick", div_size = 3, div_shape = 17))
+# 
+# np_spread <- np %>% spread(Parameter,  Value)
+# post_samples <- posterior_samples(fit) %>% select(-lp__) %>% cbind(div = factor(np_spread$divergent__))
+# 
+# ggplot(post_samples, aes(x = `r_subj_index__theta[1,Intercept]`, y = b_theta_intercept, col = div, alpha = div)) + 
+#   geom_point() + 
+#   scale_alpha_discrete(range = c(0.01, 1))
+# 
+# ggplot(post_samples, aes(x = `r_subj_index__theta[2,Intercept]`, y = b_theta_intercept, col = div, alpha = div)) + 
+#   geom_point() + 
+#   scale_alpha_discrete(range = c(0.01, 1))
+# 
+# ggplot(post_samples, aes(x = `r_subj_index__theta[1,stimulation]`, y = b_theta_stimulation, col = div, alpha = div, size = div)) + 
+#   geom_point() + 
+#   scale_alpha_discrete(range = c(0.01, 1)) + 
+#   scale_size_discrete(range = c(1, 3))
+# 
+# ggplot(post_samples, aes(x = `r_subj_index__theta[2,stimulation]`, y = b_theta_stimulation, col = div, alpha = div, size = div)) + 
+#   geom_point() + 
+#   scale_alpha_discrete(range = c(0.5, 1)) + 
+#   scale_size_discrete(range = c(1, 3))
+```
+
+Fit computation notes:
+
+inits needed to be set to 0
+
+I increased warmpup to 3000
+
+adapt_delta set all the way to 0.99
+
+Lastly, decreased the 2nd level SD prior on circSD intercept and effect parameters from Normal(0,1) --> Normal(0, 0.5)
+
+Finally, no divergences. 
+
+warmup = 3000, iter = 8000, cores = 4, chains = 4, control = list(adapt_delta = 0.99), inits = 0
+
+--------
+
+
+###Sample from the prior
+
+```{r}
+
+m1_prior_only <- brm(formula = bform, data = color_stim, prior = bprior, stanvars = stanvars, sample_prior = "only",
+           warmup = 3000, iter = 8000, cores = 4, chains = 4, control = list(adapt_delta = 0.99), inits = 0,
+           file = "m1_prior_only")
+
+plot(m1_prior_only)
+
+```
+
+One thing I noticed is that even when only sampling from the prior, brms still returns random effects. In this case my data contains two subject so, for example, I received two subj circSD intercept-offset prior distribtutions. Given no data was used for either subject, each subjects prior distribution for circSD (including adding back in the population effect `b_circSD_intercept`), should match the marginal distribution of subject circSDs (aka the prior predictive distribution for subject circSDs) calculated from `b_circSD_intercept` and `sd_subj_index__circSD_Intercept`.
+```{r}
+
+##plot to confirm
+
+#calculate marginal subj distribution
+circSD_Intercept_marg <- spread_draws(m1_prior_only, `b_circSD_intercept`, `sd_subj_index__circSD_Intercept`) %>%
+  mutate(subj_circSD = exp(rnorm(n(), b_circSD_intercept, sd_subj_index__circSD_Intercept))) %>%
+  median_qi(subj_circSD, .width = c(0.9, 0.95)) %>%
+  mutate(subj_term = "marginal subj circSD intercept") %>%
+  select(subj_term, everything())
+
+#combine marginal subj distribution with RE prior data
+circSD_Intercept_RE <- spread_draws(m1_prior_only, `b_circSD_intercept`, r_subj_index__circSD[subj, term]) %>%
+  filter(term == "Intercept") %>%
+  mutate(subj_circSD = exp(b_circSD_intercept + r_subj_index__circSD)) %>%
+  median_qi(subj_circSD, .width = c(0.9, 0.95)) %>%
+  unite(subj_term , c(subj,term)) %>%
+  rbind(circSD_Intercept_marg) %>%
+  ggplot(aes(y = subj_term, x = subj_circSD, xmin = .lower, xmax = .upper)) +
+  geom_pointintervalh() + 
+  labs(subtitle = "dot = median. 90,95% intervals")
+
+plot(circSD_Intercept_RE)
+
+#It matches. Good.
+
+```
+
+---------
+
+###Param recovery checks
+

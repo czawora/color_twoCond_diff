@@ -1,0 +1,247 @@
+---
+title: "explore_prior"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/code')
+
+```
+
+```{r lib_load}
+
+library(tidyverse)
+library(Rfast) #VM sampler
+library(pracma) #rad2deg conversions
+library(glue)
+library(cowplot)
+
+theme_set(theme_cowplot())
+
+```
+
+```{r helper_func, echo=FALSE}
+
+
+sd2k <- function(sd_input) {
+  
+  #sd_input needs to be radians
+
+  #original matlab code
+  # R <- exp(-S.^2/2);
+  # K = 1./(R.^3 - 4 * R.^2 + 3 * R);
+  # K(R < 0.85) = -0.4 + 1.39 * R(R < 0.85) + 0.43./(1 - R(R < 0.85));
+  # K(R < 0.53) = 2 * R(R < 0.53) + R(R < 0.53).^3 + (5 * R(R < 0.53).^5)/6;
+
+  R <- exp(-(sd_input^2)/2)
+  K <- 1/((R^3) - (4 * R^2) + (3*R))
+  
+  if(R < 0.85){
+    K <- -0.4 + (1.39 * R) + (0.43/(1-R))
+  }
+  
+  if(R < 0.53){
+    K <- (2 * R) + R^3 + (5 * R^5)/6
+  }
+  
+
+  return(K)
+}
+sd2k_vec <- Vectorize(sd2k)
+
+
+
+
+k2sd <- function(kappa_input){
+  
+  if (kappa_input == 0){
+    sd <- Inf
+  }else if (is.infinite(kappa_input)){
+    sd <- 0
+  }else{
+    sd <- sqrt(-2*log(besselI(kappa_input, 1)/besselI(kappa_input, 0)))
+  }
+}
+k2sd_vec <- Vectorize(k2sd)
+
+```
+
+
+Fitting a mixture model to a single subject, each radius is modelled seperately. The result is N*2 parameters, a p_guess and a kappa for each radius (per subject).
+
+
+\begin{aligned}
+error_i &\sim (1-p\_guess_i)*VM(0, \kappa_i) + (p\_guess_i)*Unif(0,2\pi) \\
+\kappa_i &= sd2k(circ\_sd_i) \\
+circ\_sd_i &= \alpha_{RADIUS[i]} \\
+p\_guess_i &= \beta_{RADIUS[i]} \\
+
+\alpha_{RADIUS} &\sim ?\\
+\beta_{RADIUS} &\sim Beta(1, 1) ~~ (uniform ~ prior ~ on ~ each ~ \beta)
+
+\end{aligned}
+
+
+```{r prior_sim, fig.align='center', fig.height=10}
+
+#function to simulate from von mises
+sim_vm <- function(k){
+  Rfast::rvonmises(1, pi, k, rads = TRUE)
+}
+sim_vm_vec <- Vectorize(sim_vm, vectorize.args = c("k"))
+
+plot_prior_dist <- function(sd_deg_sim, title_str){
+  
+  # use prior sim and its implied data
+  prior_sim <- tibble(sd_deg = sd_deg_sim) %>%
+    mutate(sd_rad = deg2rad(sd_deg), kappa = sd2k_vec(sd_rad), sim_data = rad2deg(sim_vm_vec(kappa)) - 180)
+  
+  # calc some quantiles of prior on sd
+  deg_sd_quantiles <- round(quantile(prior_sim$sd_deg, c(0.05, 0.95)),2)
+  
+  # plots
+  deg_sd <- ggplot(prior_sim, aes(x = sd_deg)) + 
+    geom_histogram(binwidth=1) + 
+    labs(subtitle = glue("{title_str} prior on VM-circ_sd\n5%={deg_sd_quantiles[1]} 95%={deg_sd_quantiles[2]}")) + 
+    geom_vline(xintercept = deg_sd_quantiles)
+  
+  kappa_plot <- ggplot(prior_sim, aes(x = kappa)) + 
+    geom_histogram() + geom_rug()
+  
+  kappa_trunc_plot <- ggplot(prior_sim, aes(x = kappa)) + 
+    geom_histogram(binwidth = 0.01) + 
+    geom_rug() + 
+    xlim(0,10) + 
+    labs(x="kappa zoomed")
+  
+  
+  quantiles <- quantile(prior_sim$sim_data,c(0.025, 0.975))
+  quantile_round <- round(quantiles, 2)
+  
+  sim_data <- ggplot(prior_sim, aes(x = sim_data)) + 
+    geom_histogram(binwidth=2) + 
+    geom_vline(xintercept = quantiles) + 
+    labs(subtitle = glue("2.5% and 97.5% quantile lines -- {quantile_round[1]} , {quantile_round[2]}"), x = "prior_implied errors (degrees)")
+  
+  cowplot::plot_grid(deg_sd, kappa_plot, kappa_trunc_plot,  sim_data, ncol = 1)
+  
+}
+
+sample_gamma <- function(mean, mult_fact){
+  
+  shape1 <- mean * mult_fact
+  shape2 <- mult_fact
+  
+  res <- enframe(rgamma(1e5, shape1, shape2), name = NULL, value = "sim")
+  sim_mean <- round(mean(res$sim), 2)
+  sim_var <- round(stats::var(res$sim), 2)
+  quantile_line <- round(quantile(res$sim, c(0.05, 0.95)), 2)
+
+  ggplot(res, aes(x = sim)) + 
+    geom_density() + 
+    geom_rug() + 
+    labs(subtitle = glue("gamma({shape1}, {shape2})\nmean = {sim_mean}, var = {sim_var}, 5%-quantile = {quantile_line[1]}, 95% = {quantile_line[2]}")) + 
+    geom_vline(xintercept = quantile_line) +
+    xlim(0, 200) + 
+    theme(plot.subtitle = element_text( size = 10))
+  
+}
+
+```
+
+## Normal
+
+```{r fig.height=10}
+
+prior_sd <- 100
+prior_sim <- abs(rnorm(5e4, 0, prior_sd))
+title_str <- paste0("halfNormal(0, ", prior_sd, ")")
+
+plot_prior_dist(prior_sim, title_str)
+
+```
+
+
+## Exponential
+
+```{r fig.height=10}
+
+desired_mean <- 100
+prior_lambda <- 1/desired_mean
+prior_sim <- rexp(5e4, prior_lambda)
+title_str <- paste0("exp(", prior_lambda, ")")
+
+plot_prior_dist(prior_sim, title_str)
+
+```
+
+
+### Gamma
+
+```{r fig.height=15, fig.width=10}
+
+gamma_sim <- tibble("mean" = 60, mult_fact = c(1/32, 1/25, 1/20, 1/16, 1/8, 1/4, 1/2, 1)) %>%
+  mutate(dens_plot = map2(mean, mult_fact, sample_gamma))
+
+plot_grid(plotlist = gamma_sim$dens_plot, ncol = 2)
+
+```
+
+
+```{r fig.height=10}
+
+mean <- 60
+shape1 <- mean*(1/10)
+shape2 <- 1/10
+prior_sim <- rgamma(5e4, shape1, shape2)
+title_str <- paste0("gamma(", shape1, ",", shape2, ")")
+
+plot_prior_dist(prior_sim, title_str)
+
+```
+
+##### Extreme kappa values are far less likely with a gamma distribution
+
+
+## Expanded logit link
+
+```{r}
+exp_sim <- tibble("orig" = seq(-1e2, 1e2)) %>%
+  mutate(inv_logit_trans = exp(orig)/(1 + exp(orig)), inv_logit_trans5 = exp(orig)/(1 + exp(orig))*5) 
+
+ggplot(exp_sim, aes(x = orig, y = inv_logit_trans5)) + 
+  geom_point()
+```
+
+
+## Log link function
+
+
+Plot exp function
+```{r}
+
+exp_sim <- tibble("orig" = seq(-1e2, 1e2)) %>%
+  mutate(exp_trans = exp(orig)) 
+
+ggplot(exp_sim, aes(x = orig, y = exp_trans)) + 
+  geom_point() + 
+  ylim(0,10)
+```
+
+
+```{r fig.height=10}
+
+mean <- 60
+shape1 <- mean*(1/10)
+shape2 <- 1/10
+prior_sim <- exp(rgamma(5e4, shape1, shape2))
+title_str <- paste0("log-gamma(", shape1, ",", shape2, ")")
+
+plot_prior_dist(prior_sim, title_str)
+
+```
+
+
+
+

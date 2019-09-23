@@ -1,0 +1,160 @@
+---
+title: "learn_custom_family"
+output: html_document
+---
+
+Learning custom_family() in brms. This is for the purpose of implementing a mixture model (von mises + uniform).
+
+```{r eval=FALSE}
+
+library(brms)
+library(tidyverse)
+
+data("cbpp", package = "lme4")
+
+#example
+beta_binomial2 <- custom_family(
+  "beta_binomial2", dpars = c("mu", "phi"),
+  links = c("logit", "log"), lb = c(NA, 0),
+  type = "int", vars = "trials[n]"
+)
+
+
+stan_funs <- "
+  real beta_binomial2_lpmf(int y, real mu, real phi, int T) {
+    return beta_binomial_lpmf(y | T, mu * phi, (1 - mu) * phi);
+  }
+  int beta_binomial2_rng(real mu, real phi, int T) {
+    return beta_binomial_rng(T, mu * phi, (1 - mu) * phi);
+  }
+"
+
+stanvars <- stanvar(scode = stan_funs, block = "functions") +
+  stanvar(as.integer(cbpp$size), name = "trials")
+
+make_stancode( incidence ~ period + (1|herd), data = cbpp, 
+  family = beta_binomial2, stanvars = stanvars)
+
+fit2 <- brm(
+  incidence ~ period + (1|herd), data = ?, 
+  family = beta_binomial2, stanvars = stanvars
+)
+
+fit2
+
+```
+
+```{r eval=FALSE}
+
+#definition
+vm_uniform_mix <- custom_family(
+  "vm_uniform_mix", 
+  dpars = c("mu", "circSD", "theta", "a", "b"),
+  links = c("identity", "log", "logit", "identity", "identity"), 
+  lb = c(NA, 0, 0, NA, NA),
+  ub = c(NA, NA, 1, NA, NA),
+  type = "real" # response type
+)
+
+# fill in functions needed to density evaluation and rng
+stan_funs <- "
+
+  real deg2rad( real d){
+    return(d * (pi()/180));
+  }
+
+  real sd2k( real sd_input) {
+  
+    //sd_input needs to be radians
+
+    //original matlab code
+    // R <- exp(-S.^2/2);
+    // K = 1./(R.^3 - 4 * R.^2 + 3 * R);
+    // K(R < 0.85) = -0.4 + 1.39 * R(R < 0.85) + 0.43./(1 - R(R < 0.85));
+    // K(R < 0.53) = 2 * R(R < 0.53) + R(R < 0.53).^3 + (5 * R(R < 0.53).^5)/6;
+
+    real R;
+    real K;
+
+    R = exp(-(sd_input^2)/2);
+    K = 1/((R^3) - (4 * R^2) + (3*R));
+  
+    if(R < 0.85){
+      K = -0.4 + (1.39 * R) + (0.43/(1-R));
+    }
+  
+    if(R < 0.53){
+      K = (2 * R) + R^3 + (5 * R^5)/6;
+    }
+
+    return(K);
+  }
+
+  real vm_uniform_mix_lpdf(real y, real mu, real circSD, real theta, real a, real b) {
+    
+   
+   real kappa = sd2k(deg2rad(circSD));
+
+
+   //* for kappa > 100 the normal approximation is used
+   //* for reasons of numerial stability
+
+    if (kappa > 100){
+
+    return log_mix( theta ,
+                    normal_lpdf(y | mu, sqrt(1/kappa)),
+                    uniform_lpdf(y | a, b));
+
+    } else {
+
+    return log_mix( theta ,
+                    von_mises_lpdf(y | mu, kappa),
+                    uniform_lpdf(y | a, b));
+    }
+  }
+
+  real vm_uniform_mix_rng(real mu, real circSD, real theta, real a, real b) {
+    
+    int flip = bernoulli_rng(theta);
+    
+    real phi;
+
+    if (flip == 1){
+      phi = von_mises_rng(mu, sd2k(deg2rad(circSD)));
+    }else{
+      phi = uniform_rng(a, b);
+    }
+
+    return(phi);
+
+  }
+"
+stanvars <- stanvar(scode = stan_funs, block = "functions")
+
+
+# data 
+color_stim <- read_csv("/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/data/stimulation_obvs.csv")
+
+# fitting
+bform <- bf(error ~ 0, #formula for first parameter mu
+            circSD ~ 0 + intercept + stimulation + (0 + intercept + stimulation || subj_index),
+            theta ~ 0 + intercept + stimulation + (0 + intercept + stimulation || subj_index), 
+            a = -pi, 
+            b = pi,
+            family = vm_uniform_mix)
+
+get_prior(bform, color_stim)
+bprior <- prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+          prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") + 
+          prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+          prior(normal(0, 1.5), class = "b", coef = "stimulation", dpar = "theta")
+
+make_stancode(bform, color_stim, stanvars = stanvars)
+
+
+```
+
+```{r}
+
+```
+
