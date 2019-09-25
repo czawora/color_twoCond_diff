@@ -915,3 +915,35 @@ sim_subj_extremes <- sim_datasets %>%
   summarize_at(vars(subj_beta0_delinked, subj_beta1_delinked, subj_pMem_effect), list(max = max, min = min)) 
 
 ```
+
+##### Across-sim max pre condition circSD
+
+```{r fig.width=10, fig.height=6}
+
+plot_grid(
+
+  #What is the max subject pre condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta0_delinked_max, fill = "red", alpha = 0.3), binwidth = 0.02) +
+  theme(legend.position = "none") + 
+  labs(x = "pre condition: max subj pMem per sim [subj_beta0_delinked_max]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta0_delinked_max < 0.05)/length(sim_subj_extremes$subj_beta0_delinked_max)}\n p(> 0.95) = {sum(sim_subj_extremes$subj_beta0_delinked_max > 0.95)/length(sim_subj_extremes$subj_beta0_delinked_max)}"))
+  
+  ,
+
+  #What is the max subject post condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta1_delinked_max, fill = "red", alpha = 0.3), binwidth = 0.02) + 
+  theme(legend.position = "none") + 
+  labs(x = "post condition: max subj pMem per sim [subj_beta1_delinked_max]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta1_delinked_max < 0.05)/length(sim_subj_extremes$subj_beta1_delinked_max)}\n p(>0.95) = {sum(sim_subj_extremes$subj_beta1_delinked_max > 0.95)/length(sim_subj_extremes$subj_beta1_delinked_max)}"))
+
+  ,
+  ncol =1,
+  align = 'v'
+
+)
+
+```
