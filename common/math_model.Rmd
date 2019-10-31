@@ -1,0 +1,18 @@
+---
+title: "math_model"
+output: html_document
+params:
+  formula_str: "$$formula$$"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=FALSE, results="asis"}
+
+# display solution as math
+cat(paste0(params$formula_str), sep="\n")
+
+```

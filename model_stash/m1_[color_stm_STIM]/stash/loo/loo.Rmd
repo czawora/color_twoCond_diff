@@ -1,0 +1,319 @@
+---
+title: "loo"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(here)
+library(scales)
+
+theme_set(theme_light())
+
+source(here("common/brms_model.R"))
+
+```
+
+## data
+
+```{r}
+
+obs_only <- 
+  read_csv(here::here("m1_[color_stm_STIM]/data/stimulation_obvs.csv")) %>%
+  mutate(subj = as_factor(subj),
+         obs_degree = error,
+         error = obs_degree * (pi/180))
+
+```
+
+## full model
+
+```{r}
+
+# define prior
+
+bprior <- 
+  prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+  prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+  prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+  prior(normal(0, 1), class = "b", coef = "stimulation", dpar = "theta") +
+  prior(normal(0, 1.5), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+  prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+fit_full <- brm(bform_full, obs_only, family = vm_uniform_mix, prior = bprior, stanvars = stanvars,
+                 warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                 control = list(adapt_delta = 0.99), inits = 0, 
+                 file = "fit_full")
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_full
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on circSD parameter
+
+```{r}
+
+# define prior
+
+bprior <- 
+  prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+  #prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+  prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+  prior(normal(0, 1), class = "b", coef = "stimulation", dpar = "theta") +
+  prior(normal(0, 1.5), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+  prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+fit_DcircSD_null <- brm(bform_DcircSD_null, obs_only, family = vm_uniform_mix, prior = bprior, stanvars = stanvars,
+                 warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                 control = list(adapt_delta = 0.99), inits = 0, 
+                 file = "fit_DcircSD_null")
+
+```
+
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DcircSD_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on pMem parameter
+
+```{r}
+
+# define prior
+
+bprior <- 
+  prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+  prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+  prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+  #prior(normal(0, 1), class = "b", coef = "stimulation", dpar = "theta") +
+  prior(normal(0, 1.5), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+  prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+fit_DpMem_null <- brm(bform_DpMem_null, obs_only, family = vm_uniform_mix, prior = bprior, stanvars = stanvars,
+                 warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                 control = list(adapt_delta = 0.99), inits = 0, 
+                 file = "fit_DpMem_null")
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DpMem_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on pMem or circSD parameter
+
+```{r}
+
+# define prior
+
+bprior <- 
+  prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+  #prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+  prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+  #prior(normal(0, 1), class = "b", coef = "stimulation", dpar = "theta") +
+  prior(normal(0, 1.5), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+  prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+fit_DcircSD_DpMem_null <- 
+              brm(bform_DcircSD_DpMem_null, obs_only, family = vm_uniform_mix, prior = bprior, stanvars = stanvars,
+                 warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                 control = list(adapt_delta = 0.99), inits = 0, 
+                 file = "fit_DcircSD_DpMem_null")
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DcircSD_DpMem_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+## loo compare
+
+```{r}
+
+#need to do this only once?
+expose_functions(fit_full, vectorize = TRUE)
+
+fit_full <- add_loo(fit_full, file = "fit_full")
+fit_DcircSD_null <- add_loo(fit_DcircSD_null, file = "fit_DcircSD_null")
+fit_DpMem_null <- add_loo(fit_DpMem_null, file = "fit_DpMem_null")
+fit_DcircSD_DpMem_null <- add_loo(fit_DcircSD_DpMem_null, file = "fit_DcircSD_DpMem_null")
+
+print("fit_full")
+fit_full$loo
+
+print("fit_DcircSD_null")
+fit_DcircSD_null$loo
+
+print("fit_DpMem_null")
+fit_DpMem_null$loo
+
+print("fit_DcircSD_DpMem_null")
+fit_DcircSD_DpMem_null$loo
+
+loo_compare(fit_full, fit_DcircSD_null, fit_DpMem_null, fit_DcircSD_DpMem_null, criterion = "loo")
+
+```
+

@@ -184,7 +184,7 @@ warmup = 3000, iter = 8000, cores = 4, chains = 4, control = list(adapt_delta = 
 
 ```{r}
 
-m1_prior_only <- brm(formula = bform, data = color_stim, prior = bprior, stanvars = stanvars, sample_prior = "only",
+m1_prior_only <- brm(formula = bform, data = color_stim, prior = bprior, stanvars = stanvars,# sample_prior = "only",
            warmup = 3000, iter = 8000, cores = 4, chains = 4, control = list(adapt_delta = 0.99), inits = 0,
            file = "m1_prior_only")
 

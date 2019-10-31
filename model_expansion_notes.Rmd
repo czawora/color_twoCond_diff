@@ -3,21 +3,23 @@ title: "model_expansion_notes"
 output: html_document
 ---
 
-#### What am I doing?
+### What am I doing?
 
 The idea of the following document is to help me organize my thoughts as I attempt to implement this two condition, multi-level model while following the steps of the Bayesian workflow.
 
+`sandbox/` is intended to contain any exploration of how I would implement a part of the workflow. One-off scripts that I use to flush out intermediary steps or hiccups I encounter while trying to get something to work.
 
-My intention for the layout of this folder is that, in addition to this document, there are at first two other folders, `sandbox/` and `data_summary/`. `sandbox/` is intended to contain any exploration of how I would implement a part of the workflow. One-off scripts that I use to flush out intermediary steps or hiccups I encounter while trying to get something to work. `data_summary/` will contain any scripts I use to explore the data, without any Bayesian inferential modeling.
+`model_stash/` will contain any models that I am not interested in looking at anymore.
 
+`common/` will contain the Rmd files that each model folder will create using call in `model/render.R`.
 
 All the other folders should be different models I iterate upon. Each folder would contain subfolders that match steps in the workflow:
 
-* Prior predictive check
+* Prior predictive check (note 10/1: I choose resonable simulation sizes for each level of a model, ingoring actual sample sizes, especially when the actual sample size is small. This is done for the purpose of getting meaningful predictive distributions.)
 
-* Simulation based calibration (computational faithfulness) - would involve biowulf
+* Simulation based calibration (computational faithfulness) - would involve biowulf, never implemented
 
-* Parameter recovery (Model sensitivity) - would involve biowulf
+* Parameter recovery (Model sensitivity) - would involve biowulf, never implemented large scale. only single simulation script.
 
 * Model fitting
 
@@ -30,9 +32,144 @@ For example, I would begin with a folder `m1/` that would be the initial modelin
 
 -----
 
-#### Model expansion history
+### Model expansion history
+
+#### m1
 
 m1 - the model I already started concocting before arranging this workflow structure. A linear model on the VM uniform mixture parameters kappa and pMem. Varying effcts for subjects on the pre condition intercept and pre-post slope. Kappa LM is log linked and the the pMem LM is logit linked. I already came up with a set of initial weakly informative priors. 
 
 the data for this particular version of the model is from the stimulation color short term memory task. 
+
+$$
+\begin{aligned}
+\mathrm{-likelihood-} \\
+error_i &\sim (pMem_i)*VM(0, \kappa_i) + (1 - pMem_i)*Unif(-\pi,\pi) \\
+\\
+\mathrm{-param~transformation-} \\
+\kappa_i &= sd2k(circ\_sd_i) \\
+\\
+\mathrm{-linear~model-} \\
+circ\_sd_i &= exp(\alpha_{0,SUBJ[i]} + \alpha_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-log~link~on~sd-} \\
+pMem_i &= inv\_logit(\beta_{0,SUBJ[i]} + \beta_{\Delta,SUBJ[i]} * postCond) ~~ \mathrm{-logit~link~on~pMem-} \\
+\\
+\mathrm{-priors:~all~independent-}\\
+\alpha_{0,SUBJ[...]} &\sim Normal(mu\_\alpha_0, sigma\_\alpha_0) \\
+\alpha_{\Delta,SUBJ[...]} &\sim Normal(mu\_\alpha_{\Delta}, sigma\_\alpha_{\Delta}) \\
+\beta_{0,SUBJ[...]} &\sim Normal(mu\_\beta_0, sigma\_\beta_0) \\
+\beta_{\Delta,SUBJ[...]} &\sim Normal(mu\_\beta_{\Delta}, sigma\_\beta_{\Delta}) \\
+\\
+mu\_\alpha_0 &\sim Normal(4, 0.5)\\
+sigma\_\alpha_0 &\sim Normal^+(0, 0.5) \\
+mu\_\alpha_{\Delta} &\sim Normal(0, 0.5)\\
+sigma\_\alpha_{\Delta} &\sim Normal^+(0, 0.5)\\
+mu\_\beta_0 &\sim Normal(0, 1.5)\\
+sigma\_\beta_0 &\sim Normal^+(0, 1.5)\\
+mu\_\beta_{\Delta} &\sim Normal(0, 1)\\
+sigma\_\beta_{\Delta} &\sim Normal^+(0, 1)\\
+\end{aligned}
+$$
+##### Able to fit with no divergences, good Rhat + neff
+
+-----
+
+#### m2
+
+m2 (adjusted from m1) - 
+
+Continuing from m1, the most noticeable problem with the initial priors was that too many extremes values were being observed at the subject level, both in terms of cricSD and pMem. This model will shrink the hierarchcial variance parameters for circSD and pMem conditions. It might turn out that the mean priors need to shrunk as well/instead.
+
+the data for this particular version of the model is from the stimulation color short term memory task. 
+
+$$
+\begin{aligned}
+m1 ~~~~~~~~~ &... ~~~~~~~~ m2\\
+sigma\_\alpha_0 \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_0 \sim Normal^+(0, 0.25) \\
+sigma\_\beta_0 \sim Normal^+(0, 1.5) ~~ ...~&to~... ~~ sigma\_\beta_0 \sim Normal^+(0, 0.5) \\
+\\
+sigma\_\alpha_\Delta \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_\Delta \sim Normal^+(0, 0.25) \\
+sigma\_\beta_\Delta \sim Normal^+(0, 1) ~~ ...~&to~... ~~ sigma\_\beta_\Delta \sim Normal^+(0, 0.5) \\
+\end{aligned}
+$$
+
+-----
+
+#### m3
+
+
+m3 (adjusted from m1+m2) - 
+
+Continuing from m1+m2, the most noticeable problem with the initial priors in m1 was that too many extremes values were being observed at the subject level, both in terms of cricSD and pMem. I think m2 achieved good priors on pMem, but I think in addition to narrowing variance priors on circSD I need to shift the mean prior 
+
+the data for this particular version of the model is from the stimulation color short term memory task. 
+
+$$
+\begin{aligned}
+m1 ~~~~~~~~~ &... ~~~~~~~~ m3\\
+mu\_\alpha_0 \sim Normal(4, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_0 \sim Normal(3.8, 0.4) \\
+\\
+sigma\_\alpha_0 \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_0 \sim Normal^+(0, 0.25) \\
+sigma\_\beta_0 \sim Normal^+(0, 1.5) ~~ ...~&to~... ~~ sigma\_\beta_0 \sim Normal^+(0, 0.5) \\
+\\
+sigma\_\alpha_\Delta \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_\Delta \sim Normal^+(0, 0.25) \\
+sigma\_\beta_\Delta \sim Normal^+(0, 1) ~~ ...~&to~... ~~ sigma\_\beta_\Delta \sim Normal^+(0, 0.5) \\
+\end{aligned}
+$$
+
+-----
+
+#### m4
+
+m4 (adjusted from m3) - 
+
+m3 + narrowing circSD pre and post mean priors.
+
+the data for this particular version of the model is from the stimulation color short term memory task. 
+
+$$
+\begin{aligned}
+m1 ~~~~~~~~~ &... ~~~~~~~~ m4\\
+mu\_\alpha_0 \sim Normal(4, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_0 \sim Normal(3.8, 0.4) \\
+mu\_\alpha_{\Delta} \sim Normal(0, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_{\Delta} \sim Normal(0, 0.4)\\
+\\
+sigma\_\alpha_0 \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_0 \sim Normal^+(0, 0.25) \\
+sigma\_\beta_0 \sim Normal^+(0, 1.5) ~~ ...~&to~... ~~ sigma\_\beta_0 \sim Normal^+(0, 0.5) \\
+\\
+sigma\_\alpha_\Delta \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_\Delta \sim Normal^+(0, 0.25) \\
+sigma\_\beta_\Delta \sim Normal^+(0, 1) ~~ ...~&to~... ~~ sigma\_\beta_\Delta \sim Normal^+(0, 0.5) \\
+\end{aligned}
+$$
+--------------
+
+#### m5
+
+m5 
+
+m4 + shifting the prior mean on the group circSD pre condition slightly more
+
+$$
+\begin{aligned}
+m1 ~~~~~~~~~ &... ~~~~~~~~ m5\\
+mu\_\alpha_0 \sim Normal(4, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_0 \sim Normal(3.7, 0.4) \\
+mu\_\alpha_{\Delta} \sim Normal(0, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_{\Delta} \sim Normal(0, 0.4)\\
+\\
+sigma\_\alpha_0 \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_0 \sim Normal^+(0, 0.25) \\
+sigma\_\beta_0 \sim Normal^+(0, 1.5) ~~ ...~&to~... ~~ sigma\_\beta_0 \sim Normal^+(0, 0.5) \\
+\\
+sigma\_\alpha_\Delta \sim Normal^+(0, 0.5) ~~ ...~&to~... ~~ sigma\_\alpha_\Delta \sim Normal^+(0, 0.25) \\
+sigma\_\beta_\Delta \sim Normal^+(0, 1) ~~ ...~&to~... ~~ sigma\_\beta_\Delta \sim Normal^+(0, 0.5) \\
+\end{aligned}
+$$
+------------
+
+#### m6 
+
+m6
+
+skipping m5, use m1 variance priors and a shifted mean prior on $mu\_\alpha_0$ from 4 -> 3.8
+
+$$
+\begin{aligned}
+mu\_\alpha_0 \sim Normal(4, 0.5) ~~ ...~&to~... ~~ mu\_\alpha_0 \sim Normal(3.8, 0.5)
+\end{aligned}
+$$
 ...

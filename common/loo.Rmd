@@ -1,0 +1,296 @@
+---
+title: "loo"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: "hide"
+    theme: spacelab
+params:
+  model_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/m4_[color_stm_STIM]"
+  common_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/common"
+  save_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/m4_[color_stm_STIM]/loo"
+  loo_notes_str: ""    
+    
+---
+
+<style type="text/css">
+
+body{
+  font-family: Helvetica;
+}
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(here)
+library(glue)
+library(scales)
+
+theme_set(theme_light())
+
+source(glue("{params$common_dir_str}/brms_model.R"))
+source(glue("{params$model_dir_str}/model_prior.R"))
+
+```
+
+## data
+
+```{r}
+
+obs_only <- 
+  read_csv(glue("{params$model_dir_str}/data/stimulation_obvs.csv")) %>%
+  mutate(subj = as_factor(subj),
+         obs_degree = error,
+         error = obs_degree * (pi/180))
+
+```
+
+## full model
+
+```{r}
+print(bprior_full)
+```
+
+
+```{r}
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+fit_full <- brm(bform_full, obs_only, prior = bprior_full, 
+                family = vm_uniform_mix, stanvars = stanvars,
+                warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                control = list(adapt_delta = 0.99), inits = 0, 
+                file =  glue("{params$save_dir_str}/fit_full"))
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_full
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on circSD parameter
+
+```{r}
+print(bprior_DcircSD_null)
+```
+
+```{r}
+
+fit_DcircSD_null <- brm(bform_DcircSD_null, obs_only, prior = bprior_DcircSD_null, 
+                        family = vm_uniform_mix, stanvars = stanvars,
+                        warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                        control = list(adapt_delta = 0.99), inits = 0, 
+                        file =  glue("{params$save_dir_str}/fit_DcircSD_null"))
+
+```
+
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DcircSD_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on pMem parameter
+
+```{r}
+print(bprior_DpMem_null)
+```
+
+```{r}
+
+fit_DpMem_null <- brm(bform_DpMem_null, obs_only, prior = bprior_DpMem_null, 
+                      family = vm_uniform_mix, stanvars = stanvars,
+                      warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                      control = list(adapt_delta = 0.99), inits = 0, 
+                      file = glue("{params$save_dir_str}/fit_DpMem_null"))
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DpMem_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+
+## reduced model: no pre to post change on pMem or circSD parameter
+
+```{r}
+bprior_DcircSD_DpMem_null
+```
+
+```{r}
+
+fit_DcircSD_DpMem_null <- 
+              brm(bform_DcircSD_DpMem_null, obs_only, prior = bprior_DcircSD_DpMem_null, 
+                  family = vm_uniform_mix, stanvars = stanvars,
+                  warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                  control = list(adapt_delta = 0.99), inits = 0, 
+                  file = glue("{params$save_dir_str}/fit_DcircSD_DpMem_null"))
+
+```
+
+### fit check
+#### divergences
+```{r fig.width=6}
+
+model_fit <- fit_DcircSD_DpMem_null
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+#### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+#### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+#### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+## loo compare
+
+
+```{r}
+
+#need to do this only once?
+expose_functions(fit_full, vectorize = TRUE)
+
+fit_full <- add_waic(fit_full, file = glue("{params$save_dir_str}/fit_full"))
+fit_DcircSD_null <- add_waic(fit_DcircSD_null, file = glue("{params$save_dir_str}/fit_DcircSD_null"))
+fit_DpMem_null <- add_waic(fit_DpMem_null, file = glue("{params$save_dir_str}/fit_DpMem_null"))
+fit_DcircSD_DpMem_null <- add_waic(fit_DcircSD_DpMem_null, file = glue("{params$save_dir_str}/fit_DcircSD_DpMem_null"))
+
+print("fit_full")
+fit_full$waic
+
+print("fit_DcircSD_null")
+fit_DcircSD_null$waic
+
+print("fit_DpMem_null")
+fit_DpMem_null$waic
+
+print("fit_DcircSD_DpMem_null")
+fit_DcircSD_DpMem_null$waic
+
+loo_compare(fit_full, fit_DcircSD_null, fit_DpMem_null, fit_DcircSD_DpMem_null, criterion = "waic")
+
+```
+
+## *Notes
+
+```{r echo=FALSE, results="asis"}
+
+# display solution as math
+cat(paste0(params$loo_notes_str), sep="\n")
+
+```

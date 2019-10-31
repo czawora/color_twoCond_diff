@@ -1,0 +1,32 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r part_a, echo=FALSE, results="asis"}
+
+# just to make sure my eval below works 
+rm(list=ls())
+
+# store solution as a list of character equations
+solution <- list(
+"$$
+\\begin{aligned}
+D_0 &= 2.40 \\\\
+g &= 0.06 \\\\
+r &= 0.12 \\\\
+V &= D_0*(1 + g)/(r - g) \\\\
+\\end{aligned}
+$$"
+)
+
+# "solve" problem
+#for (i in seq_along(solution)) eval(parse(text=solution[[i]]))
+
+# display solution as math
+cat(paste0(solution), sep="\n")
+```

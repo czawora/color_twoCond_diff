@@ -1,0 +1,1216 @@
+---
+title: "prior_predictive_check"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: "hide"
+    theme: spacelab
+fig_width: 12 
+fig_height: 10
+params:
+  formula_str: "$$formula$$"
+  top_notes_str: "no top notes"
+  sample_size_sim_str: "no notes"
+  correct_check_notes_str: "no notes"
+  vm_mean_prior_notes_str: "no notes"
+  vm_pred_notes_str: "no notes"
+  pMem_mean_prior_notes_str: "no notes"
+  pMem_pred_notes_str: "no notes"
+  obs_pred_notes_str: "no notes"
+  model_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/m1_[color_stm_STIM]"
+  common_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/common"
+  save_dir_str: "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/m1_[color_stm_STIM]/prior_predictive_check"
+
+---
+
+<style type="text/css">
+
+body{
+  font-family: Helvetica;
+}
+
+</style>
+
+### library load
+
+```{r}
+library(tidyverse)
+library(glue)
+library(tidybayes)
+library(cowplot)
+library(scales)
+library(GGally)
+library(knitr)
+library(matrixStats)
+
+theme_set(theme_cowplot())
+
+load_existing_sim <- TRUE
+```
+
+
+```{r echo=FALSE, results="asis"}
+
+# display solution as math
+cat(paste0(params$top_notes_str), sep="\n")
+
+```
+
+### model
+
+Written down the model is:
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$formula_str), sep="\n")
+
+```
+
+------
+
+### real obs load
+
+I am considering the color stimulation data. samples sizes:
+
+```{r}
+
+obs_data <- read_csv(glue('{params$model_dir_str}/data/stimulation_obvs.csv'))
+
+#summarize subj num, obs count, and obs condition split
+(subj_summary <- obs_data %>%
+  group_by(subj_index) %>%
+  summarise(n_obs = n(), frac_stim = mean(stimulation)))
+
+
+```
+
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$sample_size_sim_str), sep="\n")
+
+```
+
+------
+
+### Simulation
+
+```{r}
+
+nsubj_sim <- 15
+nobs_per_cond_sim <- 1500
+
+```
+
+
+functions
+
+```{r}
+source(glue("{params$common_dir_str}/simulation.R"))
+```
+
+
+run simulate
+
+```{r}
+source(glue("{params$model_dir_str}/model_prior.R"))
+
+print(bprior_full)
+```
+
+
+```{r}
+
+conditions <- c(0,1)
+
+sim_datasets_fpath <- glue("{params$save_dir_str}/sim_datasets.rds")
+
+found_existing_sim <- FALSE
+if (file.exists(sim_datasets_fpath)){
+  found_existing_sim <- TRUE
+}
+
+
+if (load_existing_sim == FALSE || found_existing_sim == FALSE){
+
+  print("simulating")
+  
+  nsim_datasets <- 2000
+  
+  sim_priors <- tibble(
+    sim_num = 1:nsim_datasets,
+    alpha0_mu = rnorm(nsim_datasets, alpha0_mu_prior_mu, alpha0_mu_prior_sd),
+    alpha0_sigma = abs(rnorm(nsim_datasets, alpha0_sigma_prior_mu, alpha0_sigma_prior_sd)),
+    alphaD_mu =  rnorm(nsim_datasets, alphaD_mu_prior_mu, alphaD_mu_prior_sd),
+    alphaD_sigma = abs(rnorm(nsim_datasets, alphaD_sigma_prior_mu, alphaD_sigma_prior_sd)),
+    beta0_mu = rnorm(nsim_datasets, beta0_mu_prior_mu, beta0_mu_prior_sd),
+    beta0_sigma = abs(rnorm(nsim_datasets, beta0_sigma_prior_mu, beta0_sigma_prior_sd)),
+    betaD_mu = rnorm(nsim_datasets, betaD_mu_prior_mu, betaD_mu_prior_sd),
+    betaD_sigma = abs(rnorm(nsim_datasets, betaD_sigma_prior_mu, betaD_sigma_prior_sd)),
+    nsubj = nsubj_sim,
+    nobs_per_cond = nobs_per_cond_sim
+  )
+  
+  sim_datasets <- 
+    sim_priors %>%
+    mutate(
+      # use draw_subj to sample nsubj_sim per sim using group-level parameter draws
+      dataset = pmap(sim_priors, draw_subj),
+      stimulation = list(stimulation = rep(conditions, each = nobs_per_cond_sim))) %>%
+    
+    # first unnest dataset, expanding by nsubj_sim and copying stimulation list to each subj
+    unnest(dataset) %>%
+    
+    # then unnest stimulation, expanding by nobs_per_cond_sim*2
+    unnest(stimulation) %>%
+    
+    # now use likelihood to simulation observations
+    mutate(
+      # evaluate and delink linear model on pMem
+      pMem = inv_logit(subj_beta0 + (subj_betaD * stimulation)),
+      
+      # evaluate and delink linear model on circSD/kappa
+      k = sd2k_vec(
+        pracma::deg2rad(
+          exp(subj_alpha0 + (subj_alphaD * stimulation)))),
+      
+      # use pMem to draw a 1 or 0 for each trial
+      memFlip = rbernoulli(n(), pMem),
+      
+      # use k to draw from vonMises for each trial
+      vm_draw = rvonmises_vec(1, pi, k) - pi,
+      
+      # draw from unif for each trial
+      unif_draw = runif(n(), -pi, pi),
+      
+      # assign either vm_draw or unif_draw to each trial, depending on memFlip
+      obs_radian = memFlip * vm_draw + (1 - memFlip) * unif_draw,
+      
+      # convert to degrees
+      obs_degree = obs_radian * (180/pi)
+    ) %>%
+    select(-c(pMem, k, memFlip, vm_draw, unif_draw)) %>%
+    nest(subj_obs = c(stimulation, obs_degree, obs_radian)) %>%
+    nest(dataset = c(subj, subj_alpha0, subj_alphaD, subj_beta0, subj_betaD, nobs_per_condition, subj_obs))
+
+  
+  saveRDS(sim_datasets, file = sim_datasets_fpath)
+
+}else{
+  
+  sim_datasets <- readRDS(sim_datasets_fpath)
+}
+
+```
+
+Check sim data
+
+```{r}
+head(sim_datasets)
+```
+
+```{r}
+head(sim_datasets$dataset[[1]])
+```
+
+```{r}
+head(sim_datasets$dataset[[1]]$subj_obs[[1]])
+```
+
+
+------
+
+### Plot distributions and summary statistics
+
+Ideas:
+
+Definitely plot the priors on the intercept and slope means, transformed back into sd 
+
+plot the prior predicitive densities for subjects
+
+Some other plot ideas:
+
+shaded histogram plot, combining data across stimulation conditions - check if data looks too peaked or too flat
+
+shaded histogram plot, one for each stimulation condition - same check ^
+
+plot of density lines, one from each sim dataset, one with both conditions and one with them split out - this would help identify weird distribution more that shaded histogram perhaps
+
+#### Correctness checks that prior samples are drawn correctly
+
+```{r fig.width=10, fig.height=6}
+
+sim_datasets %>%
+  select(alpha0_mu, alpha0_sigma, alphaD_mu, alphaD_sigma) %>%
+  ggpairs(progress = FALSE)
+
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+sim_datasets %>%
+  select(beta0_mu, beta0_sigma, betaD_mu, betaD_sigma) %>%
+  ggpairs(progress = FALSE)
+
+```
+
+
+
+#### Correctness check of likelihood simulation
+
+```{r}
+
+param_set <- cross_df(list(pMem = seq(0, 1, 0.1), sd = seq(20, 50, 5)))
+
+param_set %>%
+  mutate(sims = map2(param_set$pMem, sd2k_vec(pracma::deg2rad(param_set$sd)), ~simulateData_likelihood(.x, .y, 1000))) %>%
+  unnest(sims) %>% 
+  ggplot(aes(x = obs_degree)) + 
+  geom_histogram(binwidth = 1) +
+  facet_grid(rows = vars(pMem), cols = vars(sd), labeller = 'label_both', scales = 'free')
+
+```
+
+```{r}
+
+param_set <- cross_df(list(pMem = seq(0, 1, 0.1), sd = seq(55, 105, 5)))
+
+param_set %>%
+  mutate(sims = map2(param_set$pMem, sd2k_vec(pracma::deg2rad(param_set$sd)), ~simulateData_likelihood(.x, .y, 1000))) %>%
+  unnest(sims) %>% 
+  ggplot(aes(x = obs_degree)) + 
+  geom_histogram(binwidth = 1)+
+  facet_grid(rows = vars(pMem), cols = vars(sd), labeller = 'label_both')
+
+```
+
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$correct_check_notes_str), sep="\n")
+
+```
+
+-----------
+
+### Prior distribution on von-mises circSD, linear model parameters 
+
+(pre group mean, post group mean, post-pre mean change)
+
+No accounting for subject variance here
+
+```{r, fig.width=10, fig.height=6}
+
+##
+## alpha0_mu 
+##
+
+## linked prior distribution
+alpha0_mu_hist <- sim_datasets %>%
+  ggplot(aes(x = alpha0_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#F16C66") +
+  theme(legend.position = "none",
+        axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  labs(x = "linked prior on group mean for circSD, pre condition",
+       title = "circSD group mean prior, alpha0_mu") + 
+  scale_x_continuous(limits = c(1,7))
+  
+
+##
+## alpha0_mu + alphaD_mu = alpha1_mu 
+##
+
+## linked prior distribution
+alpha1_mu_hist <- sim_datasets %>%
+  transmute(alpha1_mu = alpha0_mu + alphaD_mu) %>%
+  ggplot(aes(x = alpha1_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#685369") +
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) +
+  labs(x = "linked prior on group mean for circSD, post condition",
+       title = "circSD group mean prior, alpha0_mu + alphaD_mu") + 
+  scale_x_continuous(limits = c(1,7))
+
+
+plot_grid(alpha0_mu_hist, alpha1_mu_hist, nrow = 1, align = "h")
+
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+##
+## alpha0_mu 
+##
+
+## delinked prior alpha0_mu
+alpha0_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu)) %>%
+  summarise(less_than_5 = sum(delinked < 5)/n(), greater_than_120 = sum(delinked > 120)/n())
+
+alpha0_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu)) %>%
+  ggplot(aes(x = delinked)) +
+  geom_histogram(binwidth = 2, fill = "#F16C66") + 
+  geom_vline(xintercept = c(5, 120), linetype = "dashed") + 
+  labs(x = "prior on group mean for circSD, pre condition",
+       title = "circSD group mean prior, exp(alpha0_mu)",
+       subtitle = glue("prob(circSD < 5) = {alpha0_mu_delinked_stats$less_than_5}\nprob(circSD > 120) = {alpha0_mu_delinked_stats$greater_than_120}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) 
+  
+##
+## alpha0_mu + alphaD_mu = alpha1_mu 
+##  
+  
+## delinked prior alpha0_mu + alphaD_mu
+alpha1_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 2, fill = "#685369") + 
+  labs(x = "prior on group mean for circSD, post condition",
+       title = "circSD group mean prior, exp(alpha0_mu + alphaD_mu)") + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12))
+
+
+plot_grid(alpha0_mu_delinked_hist, alpha1_mu_delinked_hist, nrow = 1, align = "h")
+```
+
+```{r fig.width=10, fig.height=6}
+
+##
+## exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu) plot
+##
+
+alphaD_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)) %>%
+  summarise(less_than_n100 = sum(delinked < -100)/n(), greater_than_100 = sum(delinked > 100)/n())
+
+alphaD_mu_delinked_hist <- sim_datasets %>%
+  transmute(delinked = exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 2, fill = "#00AEB2") + 
+  geom_vline(xintercept = c(-100, 100), linetype = "dashed") + 
+  labs(x = "prior on group mean for delta-circSD, mean post minus mean pre",
+       title = "delta-circSD group mean prior, exp(alpha0_mu + alphaD_mu) - exp(alpha0_mu)",
+       subtitle = glue("prob(delta-circSD < -100) = {alphaD_mu_delinked_stats$less_than_n100}\nprob(delta-circSD > 100) = {alphaD_mu_delinked_stats$greater_than_100}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  scale_x_continuous(breaks= pretty_breaks(10))
+
+alphaD_mu_delinked_hist
+```
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$vm_mean_prior_notes_str), sep="\n")
+
+```
+
+------------
+
+### Prior predicitive distribution on circSD at the subject level
+
+(based on simulated subjects from each dataset)
+
+These plots indicate the effects of the priors on `alpha0_mu`, `alpha0_sigma`, `alphaD_mu`, `alphaD_sigma`.
+
+#### Marginal prior on subjects pre circSD, post circSD, and effect size 
+
+(ignoring simulation sample sizes)
+
+
+```{r}
+
+sim_datasets_unnest <- sim_datasets %>%
+  unnest(dataset) %>%
+  mutate(alpha0_mu_delinked = exp(alpha0_mu),
+         alpha1_mu_delinked = exp(alpha0_mu + alphaD_mu),
+         subj_pre_circSD = exp(subj_alpha0),
+         subj_post_circSD = exp(subj_alphaD + subj_alpha0),
+         subj_circSD_ES = subj_post_circSD - subj_pre_circSD) 
+
+```
+
+```{r fig.width=10, fig.height=6}
+ 
+subj_pre_circSD_plot <- sim_datasets_unnest %>%
+  mutate(subj_pre_circSD = if_else(subj_pre_circSD > 120, 120, subj_pre_circSD)) %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  ggplot(aes(x = subj_pre_circSD)) + 
+  geom_histogram(binwidth = 5, fill = "red", alpha = 0.3) + 
+  labs(x = "subj_pre_circSD [prior predictive distribution]",
+       subtitle = glue("p(<5) = {sum(sim_datasets_unnest$subj_pre_circSD < 5)/length(sim_datasets_unnest$subj_pre_circSD)}\n p(>120) = {sum(sim_datasets_unnest$subj_pre_circSD > 120)/length(sim_datasets_unnest$subj_pre_circSD)}"))
+
+
+subj_post_circSD_plot <- sim_datasets_unnest %>%
+  mutate(subj_post_circSD = if_else(subj_post_circSD > 120, 120, subj_post_circSD)) %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  ggplot(aes(x = subj_post_circSD)) + 
+  geom_histogram(binwidth = 5, fill = "red", alpha = 0.3) + 
+  labs(x = "subj_post_circSD [prior predictive distribution]",
+       subtitle = glue("p(<5) = {sum(sim_datasets_unnest$subj_post_circSD < 5)/length(sim_datasets_unnest$subj_post_circSD)}\n p(>120) = {sum(sim_datasets_unnest$subj_post_circSD > 120)/length(sim_datasets_unnest$subj_post_circSD)}"))
+
+
+subj_circSD_ES_plot <- sim_datasets_unnest %>%
+  mutate(subj_circSD_ES = if_else(subj_circSD_ES > 100, 100, subj_circSD_ES)) %>%
+  mutate(subj_circSD_ES = if_else(subj_circSD_ES < -100, -100, subj_circSD_ES)) %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  ggplot(aes(x = subj_circSD_ES)) + 
+  geom_histogram(binwidth = 5, fill = "red", alpha = 0.7) + 
+  labs(x = "subj_circSD_ES [prior predictive distribution]",
+       subtitle = glue("p(< -100) = {sum(sim_datasets_unnest$subj_circSD_ES < -100)/length(sim_datasets_unnest$subj_circSD_ES)}\n p(>100) = {sum(sim_datasets_unnest$subj_circSD_ES > 100)/length(sim_datasets_unnest$subj_circSD_ES)}"))
+
+plot_grid(subj_pre_circSD_plot, subj_post_circSD_plot, subj_circSD_ES_plot, ncol = 1)
+
+```
+
+
+
+
+Calculate min and max subject pre, post, and circSD effect size in each simulation.
+
+```{r}
+sim_subj_extremes <- sim_datasets %>% 
+  unnest(dataset) %>%
+  mutate(subj_alpha1 = subj_alpha0 + subj_alphaD, 
+         subj_alpha0_delinked = exp(subj_alpha0), 
+         subj_alpha1_delinked = exp(subj_alpha1), 
+         subj_circSD_effect = subj_alpha1_delinked - subj_alpha0_delinked ) %>%
+  group_by(sim_num) %>%
+  summarize_at(vars(subj_alpha0_delinked, subj_alpha1_delinked, subj_circSD_effect), list(max = max, min = min)) 
+
+```
+
+#### Across-sim SD of circSD
+
+```{r fig.width=10, fig.height=6}
+
+simSD <- sim_datasets %>% 
+  unnest(dataset) %>%
+  mutate(subj_pre_circSD = exp(subj_alpha0),
+         subj_post_circSD = exp(subj_alpha0 + subj_alphaD)) %>%
+  group_by(sim_num) %>%
+  summarise_at(vars(subj_pre_circSD, subj_post_circSD), list(mean = mean, sd = sd))
+```  
+
+```{r fig.width=10, fig.height=6}
+
+plot_grid(
+  
+  ggplot(simSD, aes(subj_pre_circSD_sd)) + 
+    geom_histogram(binwidth = 2) + 
+    xlim(0, 200) + 
+    labs(x = "pre condition: observed SD of distribution of circSD, per sim", 
+         subtitle = glue::glue("p(>50) = {mean(simSD$subj_pre_circSD_sd > 50)}")),
+  
+  ggplot(simSD, aes(subj_post_circSD_sd)) + 
+    geom_histogram(binwidth = 2) +
+    xlim(0, 200) + 
+    labs(x = "post condition: observed SD of distribution of circSD, per sim",
+        subtitle = glue::glue("p(>50) = {mean(simSD$subj_post_circSD_sd > 50)}")),
+  
+  ncol = 1
+  )                                                             
+
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+plot_grid(
+  
+  ggplot(simSD, aes(subj_pre_circSD_mean, subj_pre_circSD_sd)) + 
+    geom_point() + 
+    xlim(0, 200) + ylim(0, 100) + 
+    labs(x = "pre condition: observed mean of distribution of circSD, per sim",
+         y = "pre condition: observed sd"),
+  
+  ggplot(simSD, aes(subj_post_circSD_mean, subj_post_circSD_sd)) + 
+    geom_point() +
+    xlim(0, 200) + ylim(0, 100) + 
+    labs(x = "post condition: observed mean of distribution of circSD, per sim",
+         y = "post condition: observed sd"),
+  
+  ncol = 1
+  )                                                             
+
+```
+
+#### Across-sim max circSD
+
+```{r fig.width=10, fig.height=6}
+
+#What is the max subject pre condition value in each dataset
+pre_plot <- sim_subj_extremes %>%
+  mutate(subj_alpha0_delinked_max = if_else(subj_alpha0_delinked_max > 120, 120, subj_alpha0_delinked_max)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha0_delinked_max, fill = "red", alpha = 0.3), binwidth = 5) +
+  theme(legend.position = "none") + 
+  labs(x = "pre condition: max subj circSD per sim [subj_alpha0_delinked_max]",
+       subtitle = glue("p(<5) = {sum(sim_subj_extremes$subj_alpha0_delinked_max < 5)/length(sim_subj_extremes$subj_alpha0_delinked_max)}\n p(>120) = {sum(sim_subj_extremes$subj_alpha0_delinked_max > 120)/length(sim_subj_extremes$subj_alpha0_delinked_max)}"))
+
+#What is the max subject post condition value in each dataset
+post_plot <- sim_subj_extremes %>%
+  mutate(subj_alpha1_delinked_max = if_else(subj_alpha1_delinked_max > 120, 120, subj_alpha1_delinked_max)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha1_delinked_max, fill = "red", alpha = 0.3), binwidth = 5) + 
+  theme(legend.position = "none") + 
+  labs(x = "post condition: max subj circSD per sim [subj_alpha1_delinked_max]",
+       subtitle = glue("p(<5) = {sum(sim_subj_extremes$subj_alpha1_delinked_max < 5)/length(sim_subj_extremes$subj_alpha1_delinked_max)}\n p(>120) = {sum(sim_subj_extremes$subj_alpha1_delinked_max > 120)/length(sim_subj_extremes$subj_alpha1_delinked_max)}"))
+
+
+plot_grid(pre_plot, post_plot, ncol =1, align = 'v')
+
+```
+
+
+#### Across-sim min circSD
+
+```{r fig.width=10, fig.height=6}
+
+pre_plot <- sim_subj_extremes %>%
+  mutate(subj_alpha0_delinked_min = if_else(subj_alpha0_delinked_min > 120, 120, subj_alpha0_delinked_min)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha0_delinked_min, fill = "red", alpha = 0.3), binwidth = 5) +
+  theme(legend.position = "none") + 
+  labs(x = "pre condition: min subj circSD per sim [subj_alpha0_delinked_min]",
+       subtitle = glue("p(<5) = {sum(sim_subj_extremes$subj_alpha0_delinked_min < 5)/length(sim_subj_extremes$subj_alpha0_delinked_min)}\n p(>120) = {sum(sim_subj_extremes$subj_alpha0_delinked_min > 120)/length(sim_subj_extremes$subj_alpha0_delinked_min)}"))
+
+#What is the most extreme subject post condition value in each dataset
+post_plot <- sim_subj_extremes %>%
+  mutate(subj_alpha1_delinked_min = if_else(subj_alpha1_delinked_min > 120, 120, subj_alpha1_delinked_min)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_alpha1_delinked_min, fill = "red", alpha = 0.3), binwidth = 5) + 
+  theme(legend.position = "none") + 
+  labs(x = "post condition: min subj circSD per sim [subj_alpha1_delinked_min]",
+       subtitle = glue("p(<5) = {sum(sim_subj_extremes$subj_alpha1_delinked_min < 5)/length(sim_subj_extremes$subj_alpha1_delinked_min)}\n p(>120) = {sum(sim_subj_extremes$subj_alpha1_delinked_min > 120)/length(sim_subj_extremes$subj_alpha1_delinked_min)}"))
+
+
+plot_grid(pre_plot, post_plot, ncol =1, align = 'v')
+```
+
+
+#### Across-sim max+min circSD effect size
+
+```{r fig.width=10, fig.height=6}
+#What is the most extreme change from pre to post in a subject
+
+min_plot <- sim_subj_extremes %>%
+  mutate(subj_circSD_effect_min = if_else(subj_circSD_effect_min > 100 , 100, subj_circSD_effect_min)) %>%
+  mutate(subj_circSD_effect_min = if_else(subj_circSD_effect_min < -100 , -100, subj_circSD_effect_min)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_circSD_effect_min, fill = "red", alpha = 0.3), binwidth = 5) +
+  theme(legend.position = "none") + 
+  labs(x = "min subj circSD effect per sim \n[min(subj_alpha1_delinked - subj_alpha0_delinked)]",
+       subtitle = glue("p(<-100) = {sum(sim_subj_extremes$subj_circSD_effect_min < -100)/length(sim_subj_extremes$subj_circSD_effect_min)}\n p(>100) = {sum(sim_subj_extremes$subj_circSD_effect_min > 100)/length(sim_subj_extremes$subj_circSD_effect_min)}"))
+
+#What is the most extreme subject post condition value in each dataset
+max_plot <- sim_subj_extremes %>%
+  mutate(subj_circSD_effect_max = if_else(subj_circSD_effect_max > 100 , 100, subj_circSD_effect_max)) %>%
+  mutate(subj_circSD_effect_max = if_else(subj_circSD_effect_max < -100 , -100, subj_circSD_effect_max)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_circSD_effect_max, fill = "red", alpha = 0.3), binwidth = 5) +
+  theme(legend.position = "none") + 
+  labs(x = "max subj circSD effect per sim \n[max(subj_alpha1_delinked - subj_alpha0_delinked)]",
+       subtitle = glue("p(<-100) = {sum(sim_subj_extremes$subj_circSD_effect_max < -100)/length(sim_subj_extremes$subj_circSD_effect_max)}\n p(>100) = {sum(sim_subj_extremes$subj_circSD_effect_max > 100)/length(sim_subj_extremes$subj_circSD_effect_max)}"))
+
+plot_grid(min_plot, max_plot, ncol =1, align = 'v')
+
+
+```
+
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$vm_pred_notes_str), sep="\n")
+
+```
+
+--------
+
+
+### Prior distribution on mixture probability pMem, linear model parameters 
+
+(pre group mean, post group mean, post-pre mean change)
+
+
+```{r fig.width=10, fig.height=6}
+
+## linked prior distribution
+
+
+plot_grid(
+  
+  sim_datasets %>%
+  ggplot(aes(x = beta0_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#F16C66") +
+  theme(legend.position = "none",
+        axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  labs(x = "linked prior on group mean for pMem, pre condition",
+       title = "pMem group mean prior, beta0_mu") + 
+  scale_x_continuous(limits = c(-5,5))
+  
+  ,
+  
+  sim_datasets %>%
+  transmute(beta1_mu = beta0_mu + betaD_mu) %>%
+  ggplot(aes(x = beta1_mu)) + 
+  geom_histogram(binwidth = 0.05, fill = "#685369") +
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) +
+  labs(x = "linked prior on group mean for pMem, post condition",
+       title = "pMem group mean prior, beta0_mu + betaD_mu") + 
+  scale_x_continuous(limits = c(-5,5))
+  
+  ,
+  
+  nrow = 1,
+  align = "h"
+)
+
+```
+
+```{r fig.width=10, fig.height=6}
+
+##
+## inv_logit(beta0_mu)
+##
+
+##
+## inv_logit(beta0_mu + betaD_mu) = inv_logit(beta1_mu) 
+##  
+
+## delinked prior alpha0_mu
+beta0_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(beta0_mu)/(exp(beta0_mu) + 1)) %>%
+  summarise(less_than_5 = sum(delinked < 0.05)/n(), greater_than_95 = sum(delinked > 0.95)/n())
+
+plot_grid(
+  
+  sim_datasets %>%
+  transmute(delinked = exp(beta0_mu)/(exp(beta0_mu) + 1)) %>%
+  ggplot(aes(x = delinked)) +
+  geom_histogram(binwidth = 0.03, fill = "#F16C66") + 
+  geom_vline(xintercept = c(0.05, 0.95), linetype = "dashed") + 
+  labs(x = "prior on group mean for pMem, pre condition",
+       title = "pMem group mean prior, inv_logit(beta0_mu)",
+       subtitle = glue("prob(pMem < 0.05) = {beta0_mu_delinked_stats$less_than_5}\nprob(pMem > 0.95) = {beta0_mu_delinked_stats$greater_than_95}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12))
+  
+  ,
+  
+  sim_datasets %>%
+  transmute(delinked = exp(beta0_mu + betaD_mu)/(exp(beta0_mu + betaD_mu) + 1)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 0.03, fill = "#685369") + 
+  labs(x = "prior on group mean for pMem, post condition",
+       title = "pMem group mean prior, inv_logit(alpha0_mu + alphaD_mu)") + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12))
+  
+  ,
+  
+  nrow = 1,
+  align = "h"
+)
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+##
+## inv_logit(beta0_mu + betaD_mu) - inv_logit(beta0_mu) plot
+##
+
+betaD_mu_delinked_stats <- sim_datasets %>%
+  transmute(delinked = exp(beta0_mu + betaD_mu)/(exp(beta0_mu + betaD_mu) + 1) - exp(beta0_mu)/(exp(beta0_mu) + 1)) %>%
+  summarise(less_than_n80 = sum(delinked < -0.8)/n(), greater_than_80 = sum(delinked > 0.8)/n())
+
+sim_datasets %>%
+  transmute(delinked = exp(beta0_mu + betaD_mu)/(exp(beta0_mu + betaD_mu) + 1) - exp(beta0_mu)/(exp(beta0_mu) + 1)) %>%
+  ggplot(aes(x = delinked)) + 
+  geom_histogram(binwidth = 0.02, fill = "#00AEB2") + 
+  geom_vline(xintercept = c(-0.8, 0.8), linetype = "dashed") + 
+  labs(x = "prior on group mean for delta-pMem, mean post minus mean pre",
+       title = "delta-pMem group mean prior, inv_logit(beta0_mu + betaD_mu) - inv_logit(beta0_mu)",
+       subtitle = glue("prob(delta-pMem < -0.8) = {betaD_mu_delinked_stats$less_than_n80}\nprob(delta-pMem > 0.8) = {betaD_mu_delinked_stats$greater_than_80}")) + 
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 12)) + 
+  scale_x_continuous(breaks= pretty_breaks(10))
+
+```
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$pMem_mean_prior_notes_str), sep="\n")
+
+```
+
+-----------
+
+### Prior predicitive distribution of pMem at the subject level 
+
+(based on simulated subjects from each dataset)
+
+#### Marginal prior on subjects pre pMem, post pMem, and effect size 
+
+(ignoring simulation sample sizes)
+
+```{r}
+
+sim_datasets_unnest <- sim_datasets %>%
+  unnest(dataset) %>%
+  mutate(beta0_mu_delinked = exp(beta0_mu)/(exp(beta0_mu) + 1),
+         beta1_mu_delinked = exp(beta0_mu + betaD_mu)/(exp(beta0_mu + betaD_mu) + 1),
+         subj_pre_pMem = exp(subj_beta0)/(exp(subj_beta0) + 1),
+         subj_post_pMem = exp(subj_betaD + subj_beta0)/(exp(subj_betaD + subj_beta0) + 1),
+         subj_pMem_ES = subj_post_pMem - subj_pre_pMem) 
+
+```
+
+```{r fig.width=10, fig.height=6}
+
+pMem_ES_quantiles <- quantile(sim_datasets_unnest$subj_pMem_ES, c(0.025, 0.975))
+
+plot_grid(
+  
+  sim_datasets_unnest %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  ggplot(aes(x = subj_pre_pMem)) + 
+  geom_histogram(binwidth = 0.01, fill = "red", alpha = 0.3) + 
+  labs(x = "subj_pre_pMem [prior predictive distribution]",
+       subtitle = glue("p(< 0.05) = {sum(sim_datasets_unnest$subj_pre_pMem < 0.05)/length(sim_datasets_unnest$subj_pre_pMem)}\n p(> 0.95) = {sum(sim_datasets_unnest$subj_pre_pMem > 0.95)/length(sim_datasets_unnest$subj_pre_pMem)}"))
+  
+  ,
+  
+  sim_datasets_unnest %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%  
+  ggplot(aes(x = subj_post_pMem)) + 
+  geom_histogram(binwidth = 0.01, fill = "red", alpha = 0.3) + 
+  labs(x = "subj_post_pMem [prior predictive distribution]",
+       subtitle = glue("p(< 0.05) = {sum(sim_datasets_unnest$subj_post_pMem < 0.05)/length(sim_datasets_unnest$subj_post_pMem)}\n p(> 0.95) = {sum(sim_datasets_unnest$subj_post_pMem > 0.95)/length(sim_datasets_unnest$subj_post_pMem)}"))
+  
+  ,
+  
+  sim_datasets_unnest %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%  
+  ggplot(aes(x = subj_pMem_ES)) + 
+  geom_histogram(binwidth = 0.01, fill = "red", alpha = 0.7) + 
+  geom_vline(xintercept = pMem_ES_quantiles, linetype = "dashed") + 
+  labs(x = "subj_pMem_ES [prior predictive distribution], (5%, 95%) quantile lines",
+       subtitle = glue("p(< -0.8) = {sum(sim_datasets_unnest$subj_pMem_ES < -0.8)/length(sim_datasets_unnest$subj_pMem_ES)}\n p(> 0.8) = {sum(sim_datasets_unnest$subj_pMem_ES > 0.80)/length(sim_datasets_unnest$subj_pMem_ES)}"))
+  
+  ,
+  
+  ncol = 1
+)
+```
+
+Calculate min and max subject pre, post, and pMem effect size in each simulation.
+
+```{r}
+
+sim_subj_extremes <- sim_datasets %>% 
+  unnest(dataset) %>%
+  mutate(subj_beta1 = subj_beta0 + subj_betaD, 
+         subj_beta0_delinked = exp(subj_beta0)/(exp(subj_beta0) + 1), 
+         subj_beta1_delinked = exp(subj_beta0 + subj_betaD)/(exp(subj_beta0 + subj_betaD) + 1), 
+         subj_pMem_effect = subj_beta1_delinked - subj_beta0_delinked ) %>%
+  group_by(sim_num) %>%
+  summarize_at(vars(subj_beta0_delinked, subj_beta1_delinked, subj_pMem_effect), list(max = max, min = min)) 
+
+```
+
+#### Across-sim max pMem
+
+```{r fig.width=10, fig.height=6}
+
+plot_grid(
+
+  #What is the max subject pre condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta0_delinked_max, fill = "red", alpha = 0.3), binwidth = 0.02) +
+  theme(legend.position = "none") + 
+  labs(x = "pre condition: max subj pMem per sim [subj_beta0_delinked_max]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta0_delinked_max < 0.05)/length(sim_subj_extremes$subj_beta0_delinked_max)}\n p(> 0.95) = {sum(sim_subj_extremes$subj_beta0_delinked_max > 0.95)/length(sim_subj_extremes$subj_beta0_delinked_max)}"))
+  
+  ,
+
+  #What is the max subject post condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta1_delinked_max, fill = "red", alpha = 0.3), binwidth = 0.02) + 
+  theme(legend.position = "none") + 
+  labs(x = "post condition: max subj pMem per sim [subj_beta1_delinked_max]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta1_delinked_max < 0.05)/length(sim_subj_extremes$subj_beta1_delinked_max)}\n p(>0.95) = {sum(sim_subj_extremes$subj_beta1_delinked_max > 0.95)/length(sim_subj_extremes$subj_beta1_delinked_max)}"))
+
+  ,
+  ncol =1,
+  align = 'v'
+
+)
+
+```
+
+
+#### Across-sim min pMem
+
+```{r fig.width=10, fig.height=6}
+
+plot_grid(
+
+  #What is the min subject pre condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta0_delinked_min, fill = "red", alpha = 0.3), binwidth = 0.02) +
+  theme(legend.position = "none") + 
+  labs(x = "pre condition: min subj pMem per sim [subj_beta0_delinked_min]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta0_delinked_min < 0.05)/length(sim_subj_extremes$subj_beta0_delinked_min)}\n p(> 0.95) = {sum(sim_subj_extremes$subj_beta0_delinked_min > 0.95)/length(sim_subj_extremes$subj_beta0_delinked_min)}"))
+  
+  ,
+
+  #What is the min subject post condition value in each dataset
+  sim_subj_extremes %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_beta1_delinked_min, fill = "red", alpha = 0.3), binwidth = 0.02) + 
+  theme(legend.position = "none") + 
+  labs(x = "post condition: min subj pMem per sim [subj_beta1_delinked_min]",
+       subtitle = glue("p(< 0.05) = {sum(sim_subj_extremes$subj_beta1_delinked_min < 0.05)/length(sim_subj_extremes$subj_beta1_delinked_min)}\n p(>0.95) = {sum(sim_subj_extremes$subj_beta1_delinked_min > 0.95)/length(sim_subj_extremes$subj_beta1_delinked_min)}"))
+
+  ,
+  ncol =1,
+  align = 'v'
+
+)
+
+```
+
+
+#### Across-sim max+min pMem effect size
+
+```{r fig.width=10, fig.height=6}
+#What is the most extreme change from pre to post in a subject
+
+min_plot <- sim_subj_extremes %>%
+  mutate(subj_pMem_effect_min = if_else(subj_pMem_effect_min > 1 , 1, subj_pMem_effect_min)) %>%
+  mutate(subj_pMem_effect_min = if_else(subj_pMem_effect_min < -1 , -1, subj_pMem_effect_min)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_pMem_effect_min, fill = "red", alpha = 0.3), binwidth = 0.03) +
+  theme(legend.position = "none") + 
+  labs(x = "min subj pMem effect per sim \n[min(subj_beta1_delinked - subj_beta0_delinked)]",
+       subtitle = glue("p(<-0.8) = {sum(sim_subj_extremes$subj_pMem_effect_min < -0.8)/length(sim_subj_extremes$subj_pMem_effect_min)}\n p(>0.8) = {sum(sim_subj_extremes$subj_pMem_effect_min > 0.8)/length(sim_subj_extremes$subj_pMem_effect_min)}")) + 
+  xlim(c(-1, 1))
+
+#What is the most extreme subject post condition value in each dataset
+max_plot <- sim_subj_extremes %>%
+  mutate(subj_pMem_effect_max = if_else(subj_pMem_effect_max > 1 , 1, subj_pMem_effect_max)) %>%
+  mutate(subj_pMem_effect_max = if_else(subj_pMem_effect_max < -1 , -1, subj_pMem_effect_max)) %>%
+  ggplot() + 
+  geom_histogram(aes(x = subj_pMem_effect_max, fill = "red", alpha = 0.3), binwidth = 0.03) +
+  theme(legend.position = "none") + 
+  labs(x = "max subj pMem effect per sim \n[max(subj_beta1_delinked - subj_beta0_delinked)]",
+       subtitle = glue("p(<-0.8) = {sum(sim_subj_extremes$subj_pMem_effect_max < -0.8)/length(sim_subj_extremes$subj_pMem_effect_max)}\n p(>0.8) = {sum(sim_subj_extremes$subj_pMem_effect_max > 0.8)/length(sim_subj_extremes$subj_pMem_effect_max)}")) + 
+    xlim(c(-1, 1))
+
+plot_grid(min_plot, max_plot, ncol =1, align = 'v')
+
+
+```
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$pMem_pred_notes_str), sep="\n")
+
+```
+
+------
+
+### Joint prior on pre condition + effect size
+
+```{r fig.width=10, fig.height=6}
+
+joint_pre_plot <- sim_datasets_unnest %>% 
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  ggplot(aes(y = exp(subj_alpha0), x = exp(subj_beta0)/(exp(subj_beta0) + 1))) +
+    geom_point() +
+    labs(x = 'pMem, pre', y = 'circSD, pre')
+
+plot_grid(
+  joint_pre_plot,
+  ncol = 1,
+  align = 'v'
+)
+
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+joint_ES_plot <- sim_datasets_unnest %>% 
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  mutate(subj_pMem_ES = exp(subj_beta0 + subj_betaD)/(exp(subj_beta0 + subj_betaD) + 1) - exp(subj_beta0)/(exp(subj_beta0) + 1),
+         subj_circSD_ES = exp(subj_alpha0 + subj_alphaD) - exp(subj_alpha0)) %>%
+  ggplot(aes(x = subj_pMem_ES, y = subj_circSD_ES)) +
+    geom_point() +
+    geom_vline(xintercept = 0, linetype = 'dashed') + 
+    geom_hline(yintercept = 0, linetype = 'dashed')
+  
+plot_grid(
+  joint_ES_plot,
+  joint_ES_plot + ylim(c(-200, 200)) + labs(subtitle = "zoom in"),
+  ncol = 1,
+  align = 'v'
+)
+  
+
+```
+
+
+------
+
+### Prior predicitive distribution at the observation level, per condition 
+
+(based on simulated obs from each dataset, ignoring subject labels)
+
+
+```{r fig.width=10, fig.height=6}
+
+#######################################################
+# calculate histogram quantile mats from each condition
+
+sim_subj_obs_hist_count <- function(dataset, condition = 0){
+  
+  dataset_obs <- dataset %>% 
+    sample_n(1) %>%
+    unnest(subj_obs) %>%
+    filter(stimulation == condition) %>%
+    select(obs_degree)
+  
+  breaks <- seq(-180, 180, 5)
+  
+  bincount <- hist(dataset_obs$obs_degree, breaks = breaks, plot = FALSE)$counts
+  
+  bincount_names <- glue("c{breaks[-1]}")
+  
+  names(bincount) <- bincount_names
+  bincount_df <- data.frame(as.list(bincount))
+
+  return(bincount_df)
+  
+}
+
+make_quantmat <- function(sim_datasets, condition = 0){
+
+  bincounts <- sim_datasets %>% 
+  select(dataset) %>% 
+  mutate(subj_hist_counts = map(dataset, sim_subj_obs_hist_count, condition)) %>% 
+  select(-dataset) %>% 
+  unnest(subj_hist_counts) %>%
+  as_tibble()
+
+
+  xvals <- seq(-177.5, 177.5, 5)
+  probs <- seq(0.1,0.9,0.1)
+
+  quantmat <- as.data.frame(matrix(NA, nrow=ncol(bincounts), ncol=length(probs)))
+  names(quantmat) <- paste0("p",probs)
+
+  quantmat <- cbind(quantmat, xvals)
+
+  for (iQuant in 1:length(probs)){
+   quantmat[,paste0("p",probs[iQuant])] <- as.numeric(summarise_all(bincounts, ~quantile(., probs[iQuant])))
+  }
+    
+  return(quantmat)
+}
+
+quantmat_cond0 <- make_quantmat(sim_datasets, 0)
+quantmat_cond1 <- make_quantmat(sim_datasets, 1)
+
+
+#######################################################
+# calculate ecdf quantile mats from each condition
+
+# unnest sim_datasets, using only 1 subj/dataset
+unnested <- 
+  sim_datasets %>%
+  unnest(dataset) %>%
+  group_by(sim_num) %>%
+  sample_n(1) %>%
+  ungroup() %>%
+  unnest(subj_obs)
+
+# calc quantiles mat for pre condition
+ecdf_res_stim0 <- 
+  unnested %>% 
+  filter(stimulation == 0) %>%
+  group_by(sim_num) %>% 
+  group_map(~ecdf(.$obs_degree )(seq(-180, 180, 1)))
+
+stim0_ecdf_quantiles <- bind_cols(
+  tibble(x_val = seq(-180, 180, 1)), 
+  as_tibble(colQuantiles(do.call(rbind, ecdf_res_stim0), probs = c(0.95, 0.5, 0.05 )))
+  )
+
+# calc quantiles mat for post condition
+ecdf_res_stim1 <- 
+  unnested %>% 
+  filter(stimulation == 1) %>%
+  group_by(sim_num) %>% 
+  group_map(~ecdf(.$obs_degree )(seq(-180, 180, 1)))
+
+stim1_ecdf_quantiles <- bind_cols(
+  tibble(x_val = seq(-180, 180, 1)), 
+  as_tibble(colQuantiles(do.call(rbind, ecdf_res_stim1), probs = c(0.95, 0.5, 0.05 )))
+  )
+
+                      
+```
+
+```{r fig.width=8, fig.height=6}
+
+# blues
+b_light <- "#8C9BC4"
+b_light_highlight <- "#A0ADCE"
+b_mid   <- "#546BA9"
+b_mid_highlight   <- "#7385B8"
+b_dark  <- "#002381"
+b_dark_highlight  <- "#2E4B97"
+
+#betancourt reds
+r_light <- "#DCBCBC"
+r_light_highlight <- "#C79999"
+r_mid   <- "#B97C7C"
+r_mid_highlight   <- "#A25050"
+r_dark  <- "#8F2727"
+r_dark_highlight  <- "#7C0000"
+
+
+#######################################################
+# plot histogram(density) per condition
+
+ggplot(quantmat_cond0, aes(x = xvals)) + 
+  geom_ribbon(aes(ymax = p0.9, ymin = p0.1), fill = r_light, alpha = 0.4) + 
+  geom_line(aes(y = p0.5), color = r_dark, size = 1) + 
+  geom_ribbon(data = quantmat_cond1, aes(ymax = p0.9, ymin = p0.1), fill = b_light, alpha = 0.4) + 
+  geom_line(data = quantmat_cond1, aes(y = p0.5), color = b_dark, size = 1) + 
+  scale_x_continuous(breaks=pretty_breaks(10)) + 
+  labs(x = "error (degrees) [red = pre, blue = post]", 
+       y = "count +/- quantile", 
+       subtitle = glue("per-condition prior pred dist (median line, 90% interval over {nrow(sim_datasets)} sim datasets)\n({nobs_per_cond_sim} samples/cond, per subj-level draw, per group-level mean + sd draw)")) + 
+  theme_cowplot()
+```
+
+
+```{r fig.width=10, fig.height=6}
+
+#######################################################
+# plot ecdf per condition
+
+ggplot() +
+  geom_ribbon(data = stim0_ecdf_quantiles, aes(x = x_val, ymax = `95%`, ymin = `5%`), fill = "red", alpha = 0.3) + 
+  geom_line(data = stim0_ecdf_quantiles, aes(x = x_val, y = `50%`), color = "red", size = 1) +
+  geom_ribbon(data = stim1_ecdf_quantiles, aes(x = x_val, ymax = `95%`, ymin = `5%`), fill = "blue", alpha = 0.3) + 
+  geom_line(data = stim1_ecdf_quantiles, aes(x = x_val, y = `50%`), color = "blue", size = 1) + 
+  scale_x_continuous(breaks=pretty_breaks(10)) + 
+  geom_hline(yintercept = seq(0, 1, 0.25), linetype = "dashed", alpha = 0.2) +
+  labs(x = "error (degrees) [red = pre, blue = post]", 
+       y = "cumulative prob.", 
+       subtitle = glue("per-condition prior pred cdf (median line, 90% interval over {nrow(sim_datasets)} sim datasets) \n({nobs_per_cond_sim} samples/cond, per subj-level draw, per group-level mean + sd draw"))
+
+
+
+```
+
+
+
+```{r eval=FALSE}
+
+
+
+plot_grid(          
+                                                                  
+  ggplot(quantmat_cond0, aes(x = xvals)) + 
+    geom_ribbon(aes(ymax = p0.9, ymin = p0.1), fill = c_light) + 
+    geom_ribbon(aes(ymax = p0.8, ymin = p0.2), fill = c_light_highlight) + 
+    geom_ribbon(aes(ymax = p0.7, ymin = p0.3), fill = c_mid) + 
+    geom_ribbon(aes(ymax = p0.6, ymin = p0.4), fill = c_mid_highlight) + 
+    geom_line(aes(y = p0.5), color = c_dark, size = 1) + 
+    scale_x_continuous(breaks=pretty_breaks(10)) + 
+    coord_cartesian(ylim = c(0, 150)) + 
+    labs(x = "error (degrees)", y = "count +/- quantile", subtitle = "without stimulation")
+  ,
+
+  ggplot(quantmat_cond1, aes(x = xvals)) + 
+    geom_ribbon(aes(ymax = p0.9, ymin = p0.1), fill = c_light) + 
+    geom_ribbon(aes(ymax = p0.8, ymin = p0.2), fill = c_light_highlight) + 
+    geom_ribbon(aes(ymax = p0.7, ymin = p0.3), fill = c_mid) + 
+    geom_ribbon(aes(ymax = p0.6, ymin = p0.4), fill = c_mid_highlight) + 
+    geom_line(aes(y = p0.5), color = c_dark, size = 1) + 
+    scale_x_continuous(breaks=pretty_breaks(10)) +
+    coord_cartesian(ylim = c(0, 150)) + 
+    labs(x = "error (degrees)", y = "count +/- quantile", subtitle = "with stimulation")
+  ,
+  
+  sim_datasets %>%
+    sample_n(1) %>%
+    unnest(dataset) %>%
+    unnest(subj_obs) %>% 
+    filter(stimulation == sample(c(0,1), 1)) %T>%
+    print() %>%
+    ggplot(aes(x = obs_degree)) + 
+    geom_density() + 
+    labs(subtitle = "correctness check: random simulation, random condition") + 
+    scale_x_continuous(breaks=pretty_breaks(10))
+  ,
+  
+  ncol = 1,
+  align = "v"
+)
+  
+```
+
+#### * Notes
+
+```{r echo=FALSE, results="asis"}
+
+cat(paste0(params$obs_pred_notes_str), sep="\n")
+
+```
+
+

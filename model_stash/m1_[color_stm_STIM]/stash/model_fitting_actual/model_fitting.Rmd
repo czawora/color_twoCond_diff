@@ -1,0 +1,762 @@
+---
+title: "model_fitting"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+    code_folding: "hide"
+css: ../style.css
+fig_width: 10 
+fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width = 6)
+knitr::opts_chunk$set(fig.width = 10)
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(tidybayes)
+library(bayesplot)
+library(cowplot)
+library(scales)
+library(hexbin)
+
+devAskNewPage(ask = FALSE)
+
+theme_set(theme_light())
+
+source("../../common/brms_model.R")
+source("../../common/simulation.R")
+
+
+```
+
+## load obs
+
+```{r}
+
+obs_only <- 
+  read_csv(here::here("m1_[color_stm_STIM]/data/stimulation_obvs.csv")) %>%
+  mutate(subj = as_factor(subj),
+         obs_degree = error,
+         error = obs_degree * (pi/180))
+
+# obs_only <- sim_data %>%
+#   unnest(subj_obs) %>%
+#   select(subj_index = subj, 
+#          error = obs_radian,
+#          obs_degree, 
+#          stimulation)
+
+
+
+```
+
+## peek at data
+
+```{r}
+obs_only %>% 
+  filter(stimulation == 0) %>%
+  ggplot(aes(x = obs_degree)) +
+  geom_histogram(binwidth = 10, aes(y=..density..)) + 
+  geom_rug() + 
+  geom_density(aes(y=..density..)) +  
+  facet_wrap(vars(subj_index), ncol = 1)
+```
+
+```{r}
+obs_only %>% 
+  filter(stimulation == 1) %>%
+  ggplot(aes(x = obs_degree)) +
+  geom_histogram(binwidth = 10, aes(y=..density..)) + 
+  geom_rug() + 
+  geom_density(aes(y=..density..)) +  
+  facet_wrap(vars(subj_index), ncol = 1)
+```
+
+## fit brms
+
+```{r}
+
+# define prior
+# priors
+
+bprior <- prior(normal(4, 0.5), class = "b", coef = "intercept", dpar = "circSD") + 
+  prior(normal(0, 0.5), class = "b", coef = "stimulation", dpar = "circSD") +
+  prior(normal(0, 0.5), class = "sd", coef = "Intercept", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 0.5), class = "sd", coef = "stimulation", dpar = "circSD", group = "subj_index") + 
+  prior(normal(0, 1.5), class = "b", coef = "intercept", dpar = "theta") + 
+  prior(normal(0, 1), class = "b", coef = "stimulation", dpar = "theta") +
+  prior(normal(0, 1.5), class = "sd", coef = "Intercept", dpar = "theta", group = "subj_index") + 
+  prior(normal(0, 1), class = "sd", coef = "stimulation", dpar = "theta", group = "subj_index")
+
+
+iter = 4000
+warmup = 2000
+cores = 4
+chains = 4
+n_post_samples = (iter - warmup) * chains
+
+model_fit <- brm(bform, obs_only, family = vm_uniform_mix, prior = bprior, stanvars = stanvars,
+                 sample_prior = "yes",
+                 warmup = warmup, iter = iter, cores = cores, chains = chains, 
+                 control = list(adapt_delta = 0.99), inits = 0, 
+                 file = "obs_model_fit")
+
+print(model_fit)
+
+```
+
+## fit check
+### divergences
+```{r fig.width=6}
+
+#check neff and rhat and divergences
+np <- nuts_params(model_fit)
+rhat <- brms::rhat(model_fit)
+neff_rat <- neff_ratio(model_fit)
+
+np %>% 
+  filter(Parameter == "divergent__") %>%
+  summarise(n_div = sum(Value))
+```
+
+
+### rhat
+```{r fig.width=6}
+mcmc_rhat(rhat) + yaxis_text(hjust = 1) + scale_x_continuous(breaks = pretty_breaks(6))
+```
+
+
+### neff ratio
+```{r fig.width=6}
+mcmc_neff(neff_rat) + yaxis_text(hjust = 1)
+```
+
+### trace plots
+```{r fig.width=10, fig.height=6}
+mcmc_trace(as.array(model_fit$fit))
+```
+
+### other
+```{r fig.width=10, fig.height=6}
+plot(model_fit)
+```
+
+
+## plot posteriors
+
+### arrange samples
+
+```{r}
+
+# compute summaries for plot
+
+group_level_samples <- 
+  spread_draws(model_fit, `(b|sd)_.*`, regex = TRUE) %>%
+  mutate(
+         # group level parameters
+         circSD_pre_mean  = exp(b_circSD_intercept),
+         circSD_post_mean = exp(b_circSD_intercept + b_circSD_stimulation),
+         circSD_ES_mean   = circSD_post_mean - circSD_pre_mean,
+         pMem_pre_mean    = inv_logit(b_theta_intercept),
+         pMem_post_mean   = inv_logit(b_theta_intercept + b_theta_stimulation),
+         pMem_ES_mean     = pMem_post_mean - pMem_pre_mean,
+         # predicitve dist for group level parameters
+         circSD_pre_pred  = exp(rnorm(n(), b_circSD_intercept, sd_subj_index__circSD_Intercept)),
+         circSD_post_pred = exp(rnorm(n(), b_circSD_intercept, sd_subj_index__circSD_Intercept) + 
+                                rnorm(n(), b_circSD_stimulation, sd_subj_index__circSD_stimulation)),
+         circSD_ES_pred   = circSD_post_pred - circSD_pre_pred,
+         pMem_pre_pred    = inv_logit(rnorm(n(), b_theta_intercept, sd_subj_index__theta_Intercept)),
+         pMem_post_pred   = inv_logit(rnorm(n(), b_theta_intercept, sd_subj_index__theta_Intercept) +
+                                    rnorm(n(), b_theta_stimulation, sd_subj_index__theta_stimulation)),
+         pMem_ES_pred     = pMem_post_pred - pMem_pre_pred
+         ) %>% 
+  select(-contains("b_"), -contains("sd_subj")) %>%
+  pivot_longer(-contains("."), names_to = c("param", "stat"), names_pattern = "(.*)_(.*)", values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value)
+  
+group_level_summary <- 
+  group_level_samples %>%
+  group_by(param) %>%
+  median_qi(.width = c(.5, .8, .95))
+  #median_qi(.width = c(.90, .95))
+
+
+
+circSD_subj_samples <- 
+  model_fit %>%
+  spread_draws(b_circSD_intercept, b_circSD_stimulation, r_subj_index__circSD[subj, term]) %>%
+  ungroup() %>%
+  pivot_wider(names_from = term, values_from = r_subj_index__circSD, names_prefix = "offset_") %>%
+  mutate(subj = subj,
+        circSD_pre = exp(b_circSD_intercept + offset_Intercept),
+        circSD_post = exp(b_circSD_intercept + offset_Intercept + b_circSD_stimulation + offset_stimulation),
+        circSD_ES = circSD_post - circSD_pre) %>%
+  select(-c(b_circSD_intercept, offset_Intercept, b_circSD_stimulation, offset_stimulation)) %>%
+  pivot_longer(contains("circSD"), names_to = "param", values_to = "value") 
+
+circSD_subj_summary <- 
+  circSD_subj_samples %>%
+  group_by(subj, param) %>%
+  median_qi(.width = c(.90, .95))
+  
+
+
+pMem_subj_samples <- 
+  model_fit %>%
+  spread_draws(b_theta_intercept, b_theta_stimulation, r_subj_index__theta[subj, term]) %>%
+  ungroup() %>%
+  pivot_wider(names_from = term, values_from = r_subj_index__theta, names_prefix = "offset_") %>%
+  mutate(subj = subj,
+            pMem_pre = inv_logit(b_theta_intercept + offset_Intercept),
+            pMem_post = inv_logit(b_theta_intercept + offset_Intercept + b_theta_stimulation + offset_stimulation),
+            pMem_ES = pMem_post - pMem_pre) %>%
+  select(-c(b_theta_intercept, offset_Intercept, b_theta_stimulation, offset_stimulation)) %>%
+  pivot_longer(contains("pMem"), names_to = "param", values_to = "value") 
+
+pMem_subj_summary <- 
+  pMem_subj_samples %>%
+  group_by(subj, param) %>%
+  median_qi(.width = c(.90, .95))
+    
+``` 
+
+```{r}
+group_level_samples %>%
+  select(-pred) %>%
+  group_by(param) %>%
+  median_qi(.width = c(.95))
+```
+
+### group level posteriors
+
+```{r fig.width=8, fig.height=8}
+
+circSD_p1 <- group_level_samples %>% 
+  filter(str_detect(param, "circSD")) %>%
+  ggplot() + 
+  # posterior dist + interval for group mean
+  geom_halfeyeh(aes(y = param, x = mean), .width = c(.90, .95), position = position_nudge(y = 0.15)) + 
+  # posterior predictive distribution for group means
+  stat_intervalh(aes(y = param, x = pred), .width = c(.5, .8, .95)) +
+  # posterior medians for each parameter estimate per subj
+  geom_point(data = circSD_subj_summary, aes(y = param, x = value), size = 2) +
+  # decorations
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  coord_cartesian(xlim=c(-50, 150)) +
+  labs(subtitle = "circSD: group level mean posterior (median, 90%, 95% interval), \nsubject posterior medians, \ncondition predictive dist of subjects", 
+       x = "circSD", 
+       color = "interval")
+
+# group level pMem pre, post and ES plot
+
+pMem_p1 <- group_level_samples %>% 
+  filter(str_detect(param, "pMem")) %>%
+  ggplot() + 
+  # posterior dist + interval for group mean
+  geom_halfeyeh(aes(y = param, x = mean), .width = c(.90, .95), position = position_nudge(y = 0.15)) + 
+  # posterior predictive distribution for group means
+  stat_intervalh(aes(y = param, x = pred), .width = c(.5, .8, .95)) +
+  # posterior medians for each parameter estimate per subj
+  geom_point(data = pMem_subj_summary, aes(y = param, x = value), size = 2) +
+  # decorations
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  #coord_cartesian(xlim=c(-50, 150)) +
+  labs(subtitle = "pMem: group level mean posterior (median, 90%, 95% interval), \nsubject posterior medians, \ncondition predictive dist of subjects", 
+       x = "pMem", 
+       color = "interval")
+
+plot_grid(circSD_p1, pMem_p1, align = "hv", ncol = 1)
+
+```
+
+
+### circSD pre, post, ES
+
+```{r, fig.width=9, fig.height=13}
+  
+# circSD pre: group level posteriors and subject posteriors
+
+circSD_p2 <- 
+  ggplot() + 
+  # plot group mean circSD_pre posterior and subject circSD_pre posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "circSD_pre")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              circSD_subj_samples %>%
+                              filter(str_detect(param, "circSD_pre")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot pre condition group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "circSD_pre")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject circSD_pre posterior medians in the prediction band
+  geom_point(data = circSD_subj_summary %>% filter(param == "circSD_pre"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y = -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "circSD_pre: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \ncondition predictive dist of subjects",
+       x = "circSD",
+       color = "interval")
+
+
+
+circSD_p3 <-   
+  ggplot() + 
+  # plot group mean circSD_post posterior and subject circSD_post posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "circSD_post")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              circSD_subj_samples %>%
+                              filter(str_detect(param, "circSD_post")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot post condition group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "circSD_post")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject circSD_post posterior medians in the prediction band
+  geom_point(data = circSD_subj_summary %>% filter(param == "circSD_post"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y =  -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "circSD_post: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \ncondition predictive dist of subjects",
+       x = "circSD",
+       color = "interval")
+
+
+circSD_p4 <- 
+  ggplot() + 
+  # plot group mean circSD_ES posterior and subject circSD_ES posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "circSD_ES")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              circSD_subj_samples %>%
+                              filter(str_detect(param, "circSD_ES")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot ES  group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "circSD_ES")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject circSD_ES posterior medians in the prediction band
+  geom_point(data = circSD_subj_summary %>% filter(param == "circSD_ES"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y =  -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "circSD_ES: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \nES predictive dist of subjects",
+       x = "detla circSD",
+       color = "interval")
+
+
+plot_grid(circSD_p2, circSD_p3, circSD_p4, ncol = 1, align = "hv")
+
+```
+
+
+### pMem pre, post, ES
+
+```{r, fig.width=9, fig.height=13}
+
+  
+# pMem_ pre: group level posteriors and subject posteriors
+
+pMem_p2 <- 
+  ggplot() + 
+  # plot group mean pMem__pre posterior and subject cpMem__pre posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "pMem_pre")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              pMem_subj_samples %>%
+                              filter(str_detect(param, "pMem_pre")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot pre condition group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "pMem_pre")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject pMem_pre posterior medians in the prediction band
+  geom_point(data = pMem_subj_summary %>% filter(param == "pMem_pre"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y = -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "pMem_pre: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \ncondition predictive dist of subjects",
+       x = "pMem",
+       color = "interval")
+
+
+
+pMem_p3 <-   
+  ggplot() + 
+  # plot group mean pMem_post posterior and subject pMem_post posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "pMem_post")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              pMem_subj_samples %>%
+                              filter(str_detect(param, "pMem_post")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot post condition group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "pMem_post")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject pMem_post posterior medians in the prediction band
+  geom_point(data = pMem_subj_summary %>% filter(param == "pMem_post"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y =  -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "pMem_post: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \ncondition predictive dist of subjects",
+       x = "pMem",
+       color = "interval")
+
+
+pMem_p4 <- 
+  ggplot() + 
+  # plot group mean pMem_ES posterior and subject pMem_ES posterior
+  geom_halfeyeh(data = rbind(
+                              group_level_samples %>% 
+                              filter(str_detect(param, "pMem_ES")) %>%
+                              select(-pred, value = mean)
+                            ,
+                              pMem_subj_samples %>%
+                              filter(str_detect(param, "pMem_ES")) %>%
+                              unite(param, param, subj) )
+                , aes(y = param, x = value), .width = c(.90, .95)) + 
+  # plot ES  group predictive distribution
+  stat_intervalh(data = group_level_samples %>% filter(str_detect(param, "pMem_ES")),
+                 aes(y = param , x = pred),
+                 .width = c(.5, .8, .95),
+                 position = position_nudge(y = -0.15)
+                   ) +
+  # show modeled subject pMem_ES posterior medians in the prediction band
+  geom_point(data = pMem_subj_summary %>% filter(param == "pMem_ES"),
+             aes(y = param, x = value), 
+             size = 2, 
+             position = position_nudge(y =  -0.15)) + 
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  labs(subtitle = "pMem_ES: group level mean posterior (median, 90%, 95% interval), \nsubject posterior, \nES predictive dist of subjects",
+       x = "detla pMem",
+       color = "interval")
+
+```
+
+```{r fig.width=9, fig.height=13}
+plot_grid(pMem_p2, pMem_p3, pMem_p4, ncol = 1, align = "hv")
+```
+
+
+### group level joint posteriors
+
+```{r fig.width=8, fig.height=8}
+
+group_level_samples %>%
+  pivot_wider(id_cols = contains("."), names_from = param, values_from = mean) %>%
+  select(-contains(".")) %>%
+  mcmc_pairs(off_diag_fun = "hex")
+
+```
+
+## plot posteriors w/ priors
+
+```{r}
+
+# compute summaries for plot with priors
+
+group_level_samples <- 
+  spread_draws(model_fit, `(prior_)?(b|sd)_.*`, regex = TRUE) %>%
+  mutate(
+         # prior
+         # group level parameters
+         prior_circSD_pre_mean  = exp(prior_b_circSD_intercept),
+         prior_circSD_post_mean = exp(prior_b_circSD_intercept + prior_b_circSD_stimulation),
+         prior_circSD_ES_mean   = prior_circSD_post_mean - prior_circSD_pre_mean,
+         prior_pMem_pre_mean    = inv_logit(prior_b_theta_intercept),
+         prior_pMem_post_mean   = inv_logit(prior_b_theta_intercept + prior_b_theta_stimulation),
+         prior_pMem_ES_mean     = prior_pMem_post_mean - prior_pMem_pre_mean,   
+         # predicitve dist for group level parameters
+         prior_circSD_pre_pred  = exp(rnorm(n(), prior_b_circSD_intercept, prior_sd_subj_index__circSD_Intercept)),
+         prior_circSD_post_pred = exp(rnorm(n(), prior_b_circSD_intercept, prior_sd_subj_index__circSD_Intercept) + 
+                                rnorm(n(), prior_b_circSD_stimulation, prior_sd_subj_index__circSD_stimulation)),
+         prior_circSD_ES_pred   = prior_circSD_post_pred - prior_circSD_pre_pred,
+         prior_pMem_pre_pred    = inv_logit(rnorm(n(), prior_b_theta_intercept, prior_sd_subj_index__theta_Intercept)),
+         prior_pMem_post_pred   = inv_logit(rnorm(n(), prior_b_theta_intercept, prior_sd_subj_index__theta_Intercept) +
+                                    rnorm(n(), prior_b_theta_stimulation, prior_sd_subj_index__theta_stimulation)),
+         prior_pMem_ES_pred     = prior_pMem_post_pred - prior_pMem_pre_pred,
+         
+         # posteriors
+         # group level parameters
+         circSD_pre_mean  = exp(b_circSD_intercept),
+         circSD_post_mean = exp(b_circSD_intercept + b_circSD_stimulation),
+         circSD_ES_mean   = circSD_post_mean - circSD_pre_mean,
+         pMem_pre_mean    = inv_logit(b_theta_intercept),
+         pMem_post_mean   = inv_logit(b_theta_intercept + b_theta_stimulation),
+         pMem_ES_mean     = pMem_post_mean - pMem_pre_mean,
+         # predicitve dist for group level parameters
+         circSD_pre_pred  = exp(rnorm(n(), b_circSD_intercept, sd_subj_index__circSD_Intercept)),
+         circSD_post_pred = exp(rnorm(n(), b_circSD_intercept, sd_subj_index__circSD_Intercept) + 
+                                rnorm(n(), b_circSD_stimulation, sd_subj_index__circSD_stimulation)),
+         circSD_ES_pred   = circSD_post_pred - circSD_pre_pred,
+         pMem_pre_pred    = inv_logit(rnorm(n(), b_theta_intercept, sd_subj_index__theta_Intercept)),
+         pMem_post_pred   = inv_logit(rnorm(n(), b_theta_intercept, sd_subj_index__theta_Intercept) +
+                                    rnorm(n(), b_theta_stimulation, sd_subj_index__theta_stimulation)),
+         pMem_ES_pred     = pMem_post_pred - pMem_pre_pred
+         ) %>% 
+  select(-contains("b_"), -contains("sd_subj")) %>%
+  pivot_longer(-contains("."), names_to = c( "param", "stat"), names_pattern = "(.*)_(.*)", values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+
+```
+
+### group level posteriors
+
+```{r fig.width=8, fig.height=13}
+
+
+circSD_p1_wPrior <- 
+  group_level_samples %>% 
+  filter(str_detect(param, "circSD")) %>% 
+  mutate(param = fct_relevel(param, c("prior_circSD_ES", "circSD_ES", "prior_circSD_pre", "circSD_pre", "prior_circSD_post", "circSD_post"))) %>%
+  ggplot() + 
+  
+  # posterior dist + interval for group mean
+  geom_halfeyeh(aes(y = param, x = mean), .width = c(.90, .95), position = position_nudge(y = 0.15)) + 
+  # posterior predictive distribution for group means
+  stat_intervalh(aes(y = param, x = pred), .width = c(.5, .8, .95)) +
+  # posterior medians for each parameter estimate per subj
+  geom_point(data = circSD_subj_summary, aes(y = param, x = value), size = 2) +
+  
+  # prior dist + interval for group mean
+  #geom_halfeyeh(data = group_level_prior_param_samples, aes(y = param, x = values), .width = c(.90, .95)) +
+  
+  # decorations
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  coord_cartesian(xlim=c(-50, 150)) +
+  labs(subtitle = "circSD: group level mean prior + posterior (median, 90%, 95% interval), \nsubject posterior medians, \ncondition predictive dist of subjects", 
+       x = "circSD", 
+       color = "interval")
+
+# group level pMem pre, post and ES plot
+
+pMem_p1_wPrior <- 
+  group_level_samples %>% 
+  filter(str_detect(param, "pMem")) %>%
+  mutate(param = fct_relevel(param, c("prior_pMem_ES", "pMem_ES", "prior_pMem_pre", "pMem_pre", "prior_pMem_post", "pMem_post"))) %>%
+  ggplot() + 
+  
+  # posterior dist + interval for group mean
+  geom_halfeyeh(aes(y = param, x = mean), .width = c(.90, .95), position = position_nudge(y = 0.15)) + 
+  # posterior predictive distribution for group means
+  stat_intervalh(aes(y = param, x = pred), .width = c(.5, .8, .95)) +
+  # posterior medians for each parameter estimate per subj
+  geom_point(data = pMem_subj_summary, aes(y = param, x = value), size = 2) +
+  
+  # decorations
+  scale_color_brewer() + 
+  scale_x_continuous(breaks = pretty_breaks(10)) + 
+  #coord_cartesian(xlim=c(-50, 150)) +
+  labs(subtitle = "pMem: group level mean prior + posterior (median, 90%, 95% interval), \nsubject posterior medians, \ncondition predictive dist of subjects", 
+       x = "pMem", 
+       color = "interval")
+
+plot_grid(circSD_p1_wPrior, pMem_p1_wPrior, align = "hv", ncol = 1)
+
+```
+
+## posterior predictive plot of errors
+
+```{r}
+
+if (file.exists("post_pred_obs.rds")){
+  
+  obs_sim <- readRDS("post_pred_obs.rds")
+
+}else{
+
+  posterior_arranged <- 
+    spread_draws(model_fit, `(b|sd)_.*`, regex = TRUE) %>%
+    sample_n(250) %>%
+    mutate(sim_num = 1:n(),
+           nsubj = 1,
+           nobs_per_cond = 1e3) %>%
+    select(-contains(".")) %>%
+    select(sim_num,
+           alpha0_mu = b_circSD_intercept,
+           alpha0_sigma = sd_subj_index__circSD_Intercept,
+           alphaD_mu = b_circSD_stimulation,
+           alphaD_sigma = sd_subj_index__circSD_stimulation,
+           beta0_mu = b_theta_intercept,
+           beta0_sigma = sd_subj_index__theta_Intercept,
+           betaD_mu = b_theta_stimulation,
+           betaD_sigma = sd_subj_index__theta_stimulation,
+           nsubj,
+           nobs_per_cond) 
+  
+  obs_sim <- posterior_arranged %>% 
+    mutate(dataset = pmap(posterior_arranged, simulateData)) 
+  
+  saveRDS(obs_sim, "post_pred_obs.rds")
+  
+}
+
+
+dens_pre <- 
+  obs_sim %>%
+  unnest(dataset) %>%
+  select(subj_obs_dens_pre)
+
+dens_post <- 
+  obs_sim %>%
+  unnest(dataset) %>%
+  select(subj_obs_dens_post)
+
+plot_grid(
+  
+  ggplot() + 
+    dens_pre$subj_obs_dens_pre + 
+    coord_cartesian(xlim=c(-180, 180))
+ ,
+  ggplot() + 
+   dens_post$subj_obs_dens_post + 
+   coord_cartesian(xlim=c(-180, 180))
+ ,
+  
+  align = "v",
+  ncol = 1
+)
+
+```
+
+
+```{r}
+
+sim_subj_obs_hist_count <- function(dataset, condition = 0){
+  
+  dataset_obs <- dataset %>% 
+    unnest(subj_obs) %>%
+    ungroup() %>%
+    filter(stimulation == condition) %>%
+    select(obs_degree)
+  
+  breaks <- seq(-180, 180, 5)
+  
+  bincount <- hist(dataset_obs$obs_degree, breaks = breaks, plot = FALSE)$counts
+  
+  bincount_names <- glue("c{breaks[-1]}")
+  
+  names(bincount) <- bincount_names
+  bincount_df <- data.frame(as.list(bincount))
+
+  return(bincount_df)
+  
+}
+
+make_quantmat <- function(sim_datasets, condition = 0){
+
+  bincounts <- sim_datasets %>% 
+  select(dataset) %>% 
+  mutate(subj_hist_counts = map(dataset, sim_subj_obs_hist_count, condition)) %>% 
+  select(-dataset) %>% 
+  unnest(subj_hist_counts) %>%
+  as_tibble()
+
+
+  xvals <- seq(-177.5, 177.5, 5)
+  probs <- seq(0.1,0.9,0.1)
+
+  quantmat <- as.data.frame(matrix(NA, nrow=ncol(bincounts), ncol=length(probs)))
+  names(quantmat) <- paste0("p",probs)
+
+  quantmat <- cbind(quantmat, xvals)
+
+  for (iQuant in 1:length(probs)){
+   quantmat[,paste0("p",probs[iQuant])] <- as.numeric(summarise_all(bincounts, ~quantile(., probs[iQuant])))
+  }
+    
+  return(quantmat)
+}
+
+# calculate quantile mats from each condition
+quantmat_cond0 <- make_quantmat(obs_sim, 0)
+quantmat_cond1 <- make_quantmat(obs_sim, 1)
+
+ 
+c_light <- "#DCBCBC"
+c_light_highlight <- "#C79999"
+c_mid   <- "#B97C7C"
+c_mid_highlight   <- "#A25050"
+c_dark  <- "#8F2727"
+c_dark_highlight  <- "#7C0000"
+
+
+plot_grid(          
+                                                                  
+  ggplot(quantmat_cond0, aes(x = xvals)) + 
+    geom_ribbon(aes(ymax = p0.9, ymin = p0.1), fill = c_light) + 
+    geom_ribbon(aes(ymax = p0.8, ymin = p0.2), fill = c_light_highlight) + 
+    geom_ribbon(aes(ymax = p0.7, ymin = p0.3), fill = c_mid) + 
+    geom_ribbon(aes(ymax = p0.6, ymin = p0.4), fill = c_mid_highlight) + 
+    geom_line(aes(y = p0.5), color = c_dark, size = 1) + 
+    scale_x_continuous(breaks=pretty_breaks(10)) + 
+    coord_cartesian(ylim = c(0, 100)) + 
+    labs(x = "error (degrees)", y = "count +/- quantile", subtitle = "without stimulation")
+  ,
+
+  ggplot(quantmat_cond1, aes(x = xvals)) + 
+    geom_ribbon(aes(ymax = p0.9, ymin = p0.1), fill = c_light) + 
+    geom_ribbon(aes(ymax = p0.8, ymin = p0.2), fill = c_light_highlight) + 
+    geom_ribbon(aes(ymax = p0.7, ymin = p0.3), fill = c_mid) + 
+    geom_ribbon(aes(ymax = p0.6, ymin = p0.4), fill = c_mid_highlight) + 
+    geom_line(aes(y = p0.5), color = c_dark, size = 1) + 
+    scale_x_continuous(breaks=pretty_breaks(10)) +
+    coord_cartesian(ylim = c(0, 100)) + 
+    labs(x = "error (degrees)", y = "count +/- quantile", subtitle = "with stimulation")
+  ,
+  
+  ncol = 1,
+  align = "v"
+)
+```
+

@@ -232,7 +232,7 @@ Try a skew-normal prior
 
 ```{r fig.height=5}
 lnorm_prior_sim <-
-  tibble("prior" = rsn(5e4, 5, 1, -15)) %>%
+  tibble("prior" = rsn(5e4, 4.5, 1, -15)) %>%
   mutate(log_link_prior = exp(prior), log_link_prior_k = sd2k_vec(deg2rad(log_link_prior)), implied_data_rad = map(log_link_prior_k, sim_vm)) %>%
   unnest(implied_data_rad)
 
@@ -274,10 +274,79 @@ Check prior on change in post condition.
 ```{r fig.height = 7}
 
 norm_prior_sim <-
-  tibble("prior_pre" = rnorm(5e4, 4, 0.5), "prior_post" = rnorm(5e4, 0, 0.5)) %>%
+  tibble("prior_pre" = rsn(5e4, 4.5, 1, -30), "prior_pre2" = rsn(5e4, 4.5, 1, -30),  "prior_post" = rnorm(5e4, 0, 0.5)) %>%
+  #tibble("prior_pre" = rnorm(5e4, 3.7, 0.5), "prior_post" = rnorm(5e4, 0, 0.5)) %>%
   mutate(summed_post = prior_pre + prior_post) %>%
   mutate(log_link_prior_pre = exp(prior_pre),
          log_link_prior_summed_post = exp(summed_post),
+         log_link_prePost_diff = log_link_prior_summed_post - log_link_prior_pre)
+  #       pre_pre_diff = log(exp(prior_pre) - exp(prior_pre2)))
+  #        log_link_prior_k_pre = sd2k_vec(deg2rad(log_link_prior_pre)),
+  #        log_link_prior_k_post = sd2k_vec(deg2rad(log_link_prior_summed_post)),
+  #        implied_pre_data_rad = map(log_link_prior_k_pre, sim_vm),
+  #        implied_post_data_rad = map(log_link_prior_k_post, sim_vm)) %>%
+  # unnest(implied_pre_data_rad, implied_post_data_rad)
+
+#plot prior preCond hist in link space
+hist_quantile <- round(quantile(norm_prior_sim$prior_pre, c(0.025, 0.975)), 2)
+pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = prior_pre)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+#plot prior preCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_pre, c(0.025, 0.975)), 2)
+delink_pre_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prior_pre)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+
+#plot prior postCond hist in linked space
+hist_quantile <- round(quantile(norm_prior_sim$summed_post, c(0.025, 0.975)), 2)
+post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = summed_post)) + 
+  geom_histogram(binwidth = 0.1) + 
+  geom_vline(xintercept = hist_quantile) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 10)) 
+
+#plot prior postCond hist in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_summed_post, c(0.025, 0.975)), 2)
+delink_post_sum_prior_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prior_summed_post)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(0, 300)) 
+
+
+
+#plot prior postCond-preCond diff in delinked space
+hist_quantile <- round(quantile(norm_prior_sim$log_link_prePost_diff, c(0.025, 0.975)), 2)
+delinked_prePost_diff_hist <- 
+  ggplot(norm_prior_sim, aes(x = log_link_prePost_diff)) + 
+  geom_histogram(binwidth = 1) + 
+  geom_vline(xintercept = hist_quantile) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
+  coord_cartesian(xlim=c(-150, 150)) 
+
+
+plot_grid(pre_prior_hist, delink_pre_prior_hist, post_sum_prior_hist, delink_post_sum_prior_hist, delinked_prePost_diff_hist, ncol = 1, align = "v")
+
+```
+
+```{r fig.height = 7}
+
+norm_prior_sim <-
+  tibble("prior_pre" = rnorm(5e4, 0, 1.6), "prior_post" = rnorm(5e4, 0, 2)) %>%
+  mutate(summed_post = prior_pre + prior_post) %>%
+  mutate(log_link_prior_pre = 100 * ( exp(prior_pre)/(exp(prior_pre) + 1) ),
+         log_link_prior_summed_post = 100 * ( exp(summed_post)/(exp(summed_post) + 1) ),
          log_link_prePost_diff = log_link_prior_summed_post - log_link_prior_pre)
   #        log_link_prior_k_pre = sd2k_vec(deg2rad(log_link_prior_pre)),
   #        log_link_prior_k_post = sd2k_vec(deg2rad(log_link_prior_summed_post)),
@@ -292,7 +361,7 @@ pre_prior_hist <-
   geom_histogram(binwidth = 0.1) + 
   geom_vline(xintercept = hist_quantile) + 
   scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-  coord_cartesian(xlim=c(0, 10)) 
+  coord_cartesian(xlim=c(-5, 5)) 
 
 #plot prior preCond hist in delinked space
 hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_pre, c(0.05, 0.95)), 2)
@@ -304,36 +373,36 @@ delink_pre_prior_hist <-
   coord_cartesian(xlim=c(0, 300)) 
 
 
-#plot prior postCond hist in linked space
+# #plot prior postCond hist in linked space
 hist_quantile <- round(quantile(norm_prior_sim$summed_post, c(0.05, 0.95)), 2)
-post_sum_prior_hist <- 
-  ggplot(norm_prior_sim, aes(x = summed_post)) + 
-  geom_histogram(binwidth = 0.1) + 
-  geom_vline(xintercept = hist_quantile) + 
+post_sum_prior_hist <-
+  ggplot(norm_prior_sim, aes(x = summed_post)) +
+  geom_histogram(binwidth = 0.1) +
+  geom_vline(xintercept = hist_quantile) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-  coord_cartesian(xlim=c(0, 10)) 
+  coord_cartesian(xlim=c(-5, 5))
 
-#plot prior postCond hist in delinked space
+# #plot prior postCond hist in delinked space
 hist_quantile <- round(quantile(norm_prior_sim$log_link_prior_summed_post, c(0.05, 0.95)), 2)
-delink_post_sum_prior_hist <- 
-  ggplot(norm_prior_sim, aes(x = log_link_prior_summed_post)) + 
-  geom_histogram(binwidth = 1) + 
+delink_post_sum_prior_hist <-
+  ggplot(norm_prior_sim, aes(x = log_link_prior_summed_post)) +
+  geom_histogram(binwidth = 1) +
   geom_vline(xintercept = hist_quantile) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
-  coord_cartesian(xlim=c(0, 300)) 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(0, 300))
 
 
 
-#plot prior postCond-preCond diff in delinked space
+# #plot prior postCond-preCond diff in delinked space
 hist_quantile <- round(quantile(norm_prior_sim$log_link_prePost_diff, c(0.05, 0.95)), 2)
-delinked_prePost_diff_hist <- 
-  ggplot(norm_prior_sim, aes(x = log_link_prePost_diff)) + 
-  geom_histogram(binwidth = 1) + 
+delinked_prePost_diff_hist <-
+  ggplot(norm_prior_sim, aes(x = log_link_prePost_diff)) +
+  geom_histogram(binwidth = 1) +
   geom_vline(xintercept = hist_quantile) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) + 
-  coord_cartesian(xlim=c(-150, 150)) 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+  coord_cartesian(xlim=c(-150, 150))
 
-
+#plot_grid(pre_prior_hist, delink_pre_prior_hist, ncol = 1, align = "v")
 plot_grid(pre_prior_hist, delink_pre_prior_hist, post_sum_prior_hist, delink_post_sum_prior_hist, delinked_prePost_diff_hist, ncol = 1, align = "v")
 
 ```
@@ -357,7 +426,7 @@ prior(normal(0, 1.5), class = "b", coef = "stimulation", dpar = "theta")
 ```{r fig.height = 7}
 
 norm_prior_sim <-
-  tibble("prior_pre" = rnorm(5e4, 0, 1.5), "prior_post" = rnorm(5e4, 0, 1.5)) %>%
+  tibble("prior_pre" = rnorm(5e4, 0, 1.5), "prior_post" = rnorm(5e4, 0, 1)) %>%
   mutate(summed_post = prior_pre + prior_post) %>%
   mutate(logit_link_prior_pre = exp(prior_pre)/(1 + exp(prior_pre)),
          logit_link_prior_summed_post = exp(summed_post)/(1 + exp(summed_post)),

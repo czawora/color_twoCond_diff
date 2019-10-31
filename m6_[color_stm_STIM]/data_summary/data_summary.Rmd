@@ -1,0 +1,78 @@
+---
+title: "data_summary"
+output: html_document
+css: style.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+
+obs_data <- read_csv('../data/stimulation_obvs.csv')
+
+glimpse(obs_data)
+```
+
+------
+
+Count Na vals
+
+```{r}
+obs_data %>%
+  summarise_all(~ sum(is.na(.)))
+```
+
+------
+
+count observations per subject
+```{r}
+
+obs_data %>%
+  group_by(subj_index) %>%
+  summarise(n_obs = n(), frac_stim = mean(stimulation))
+
+```
+
+------
+
+Plot histogram for each subject's errors by condition
+```{r}
+obs_data %>% 
+  filter(stimulation == 0) %>%
+  ggplot(aes(x = error)) +
+  geom_histogram(binwidth = 10, aes(y=..density..)) + 
+  geom_rug() + 
+  geom_density(aes(y=..density..)) +  
+  facet_wrap(vars(subj), ncol = 1)
+
+```
+```{r}
+obs_data %>% 
+  filter(stimulation == 1) %>%
+  ggplot(aes(x = error)) +
+  geom_histogram(binwidth = 10, aes(y=..density..)) + 
+  geom_rug() + 
+  geom_density(aes(y=..density..)) + 
+  facet_wrap(vars(subj), ncol = 1)
+
+```
+```
+
+-----
+
+```{r}
+
+obs_data %>%
+  group_by(subj_index) %>%
+  summarise(max_error = max(error), min_error = min(error))
+
+```
+
