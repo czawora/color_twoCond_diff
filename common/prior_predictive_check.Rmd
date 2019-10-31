@@ -97,13 +97,6 @@ cat(paste0(params$sample_size_sim_str), sep="\n")
 
 ### Simulation
 
-```{r}
-
-nsubj_sim <- 15
-nobs_per_cond_sim <- 1500
-
-```
-
 
 functions
 
@@ -113,6 +106,8 @@ source(glue("{params$common_dir_str}/simulation.R"))
 
 
 run simulate
+
+here the idea is to take the priors and simulate many possible data sets from them. Since this is a two-level multilevel model, there are three steps of stimulation. First simulate from the group-level priors, then for each draw from the group-level params, simulate a number of subjects (in the case set as a constant value for all simulations), and lastly within each subject simulate observations/responses during the task (in this case the nobs_per_cond is also set as fixed for all simulations).
 
 ```{r}
 source(glue("{params$model_dir_str}/model_prior.R"))
@@ -137,8 +132,13 @@ if (load_existing_sim == FALSE || found_existing_sim == FALSE){
 
   print("simulating")
   
-  nsim_datasets <- 2000
-  
+  nsim_datasets <- 1500
+  nsubj_sim <- 15
+  nobs_per_cond_sim <- 800
+
+  # this generates a data frame with one column for each group level variable that is sampled
+  # it also contains a simulation index (sim_num), number of subjects to simulate in each dataset,
+  # and the number of observations we have from each subject per condition
   sim_priors <- tibble(
     sim_num = 1:nsim_datasets,
     alpha0_mu = rnorm(nsim_datasets, alpha0_mu_prior_mu, alpha0_mu_prior_sd),
@@ -153,6 +153,7 @@ if (load_existing_sim == FALSE || found_existing_sim == FALSE){
     nobs_per_cond = nobs_per_cond_sim
   )
   
+  # using those simulated group-level priors, next simulate subjects and observations from those subjects.
   sim_datasets <- 
     sim_priors %>%
     mutate(
@@ -202,6 +203,10 @@ if (load_existing_sim == FALSE || found_existing_sim == FALSE){
   
   sim_datasets <- readRDS(sim_datasets_fpath)
 }
+
+nsim_datasets <- nrow(sim_datasets)
+nsubj_sim <- sim_datasets$nsubj[1]
+nobs_per_cond_sim <- sim_datasets$nobs_per_cond[1] 
 
 ```
 
@@ -261,6 +266,8 @@ sim_datasets %>%
 
 #### Correctness check of likelihood simulation
 
+This code simulates distributions of oberservations using the mixture likelihood, sweeping across parameter combos. 
+
 ```{r}
 
 param_set <- cross_df(list(pMem = seq(0, 1, 0.1), sd = seq(20, 50, 5)))
@@ -302,7 +309,7 @@ cat(paste0(params$correct_check_notes_str), sep="\n")
 
 (pre group mean, post group mean, post-pre mean change)
 
-No accounting for subject variance here
+No accounting for group-level variance here
 
 ```{r, fig.width=10, fig.height=6}
 
@@ -426,8 +433,7 @@ These plots indicate the effects of the priors on `alpha0_mu`, `alpha0_sigma`, `
 
 #### Marginal prior on subjects pre circSD, post circSD, and effect size 
 
-(ignoring simulation sample sizes)
-
+using only one simulated subject per dataset (ignoring simulation sample sizes)
 
 ```{r}
 
@@ -499,6 +505,8 @@ sim_subj_extremes <- sim_datasets %>%
 
 #### Across-sim SD of circSD
 
+This is done to get a sense of the effect of group-level variance priors. I am doing it this way (estimating sd among subjects after simulation) because it not straightforward to tranform variance in the log space to variance after exponentiating.
+
 ```{r fig.width=10, fig.height=6}
 
 simSD <- sim_datasets %>% 
@@ -553,6 +561,8 @@ plot_grid(
 ```
 
 #### Across-sim max circSD
+
+This is done to get a sense if the max/min in each dataset are consistently too extreme.
 
 ```{r fig.width=10, fig.height=6}
 
@@ -776,7 +786,7 @@ cat(paste0(params$pMem_mean_prior_notes_str), sep="\n")
 
 #### Marginal prior on subjects pre pMem, post pMem, and effect size 
 
-(ignoring simulation sample sizes)
+using only one simulated subject per dataset  (ignoring simulation sample sizes)
 
 ```{r}
 
@@ -1005,7 +1015,9 @@ plot_grid(
 
 ### Prior predicitive distribution at the observation level, per condition 
 
-(based on simulated obs from each dataset, ignoring subject labels)
+(based on simulated obs from each dataset)
+
+again only using one subject from each simulated dataset.
 
 
 ```{r fig.width=10, fig.height=6}
