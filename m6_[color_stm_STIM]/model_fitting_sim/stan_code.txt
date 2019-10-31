@@ -1,0 +1,170 @@
+// generated with brms 2.10.3
+functions {
+
+
+  real deg2rad( real d){
+    return(d * (pi()/180));
+  }
+
+  real sd2k( real sd_input) {
+  
+    //sd_input needs to be radians
+
+    //original matlab code
+    // R <- exp(-S.^2/2);
+    // K = 1./(R.^3 - 4 * R.^2 + 3 * R);
+    // K(R < 0.85) = -0.4 + 1.39 * R(R < 0.85) + 0.43./(1 - R(R < 0.85));
+    // K(R < 0.53) = 2 * R(R < 0.53) + R(R < 0.53).^3 + (5 * R(R < 0.53).^5)/6;
+
+    real R;
+    real K;
+
+    R = exp(-(sd_input^2)/2);
+    K = 1/((R^3) - (4 * R^2) + (3*R));
+  
+    if(R < 0.85){
+      K = -0.4 + (1.39 * R) + (0.43/(1-R));
+    }
+  
+    if(R < 0.53){
+      K = (2 * R) + R^3 + (5 * R^5)/6;
+    }
+
+    return(K);
+  }
+
+  real vm_uniform_mix_lpdf(real y, real mu, real circSD, real theta, real a, real b) {
+    
+   
+   real kappa = sd2k(deg2rad(circSD));
+
+
+   //* for kappa > 100 the normal approximation is used
+   //* for reasons of numerial stability
+
+    if (kappa > 100){
+
+    return log_mix( theta ,
+                    normal_lpdf(y | mu, sqrt(1/kappa)),
+                    uniform_lpdf(y | a, b));
+
+    } else {
+
+    return log_mix( theta ,
+                    von_mises_lpdf(y | mu, kappa),
+                    uniform_lpdf(y | a, b));
+    }
+  }
+
+  real vm_uniform_mix_rng(real mu, real circSD, real theta, real a, real b) {
+    
+    int flip = bernoulli_rng(theta);
+    
+    real phi;
+
+    if (flip == 1){
+      phi = von_mises_rng(mu, sd2k(deg2rad(circSD)));
+    }else{
+      phi = uniform_rng(a, b);
+    }
+
+    return(phi);
+
+  }
+
+}
+data {
+  int<lower=1> N;  // number of observations
+  vector[N] Y;  // response variable
+  int<lower=1> K_circSD;  // number of population-level effects
+  matrix[N, K_circSD] X_circSD;  // population-level design matrix
+  int<lower=1> K_theta;  // number of population-level effects
+  matrix[N, K_theta] X_theta;  // population-level design matrix
+  real a;
+  real b;
+  // data for group-level effects of ID 1
+  int<lower=1> N_1;  // number of grouping levels
+  int<lower=1> M_1;  // number of coefficients per level
+  int<lower=1> J_1[N];  // grouping indicator per observation
+  // group-level predictor values
+  vector[N] Z_1_circSD_1;
+  vector[N] Z_1_circSD_2;
+  // data for group-level effects of ID 2
+  int<lower=1> N_2;  // number of grouping levels
+  int<lower=1> M_2;  // number of coefficients per level
+  int<lower=1> J_2[N];  // grouping indicator per observation
+  // group-level predictor values
+  vector[N] Z_2_theta_1;
+  vector[N] Z_2_theta_2;
+  int prior_only;  // should the likelihood be ignored?
+}
+transformed data {
+}
+parameters {
+  vector[K_circSD] b_circSD;  // population-level effects
+  vector[K_theta] b_theta;  // population-level effects
+  vector<lower=0>[M_1] sd_1;  // group-level standard deviations
+  // standardized group-level effects
+  vector[N_1] z_1[M_1];
+  vector<lower=0>[M_2] sd_2;  // group-level standard deviations
+  // standardized group-level effects
+  vector[N_2] z_2[M_2];
+}
+transformed parameters {
+  // actual group-level effects
+  vector[N_1] r_1_circSD_1 = (sd_1[1] * (z_1[1]));
+  vector[N_1] r_1_circSD_2 = (sd_1[2] * (z_1[2]));
+  // actual group-level effects
+  vector[N_2] r_2_theta_1 = (sd_2[1] * (z_2[1]));
+  vector[N_2] r_2_theta_2 = (sd_2[2] * (z_2[2]));
+}
+model {
+  // initialize linear predictor term
+  vector[N] mu = rep_vector(0, N);
+  // initialize linear predictor term
+  vector[N] circSD = X_circSD * b_circSD;
+  // initialize linear predictor term
+  vector[N] theta = X_theta * b_theta;
+  for (n in 1:N) {
+    // add more terms to the linear predictor
+    circSD[n] += r_1_circSD_1[J_1[n]] * Z_1_circSD_1[n] + r_1_circSD_2[J_1[n]] * Z_1_circSD_2[n];
+  }
+  for (n in 1:N) {
+    // add more terms to the linear predictor
+    theta[n] += r_2_theta_1[J_2[n]] * Z_2_theta_1[n] + r_2_theta_2[J_2[n]] * Z_2_theta_2[n];
+  }
+  for (n in 1:N) {
+    // apply the inverse link function
+    circSD[n] = exp(circSD[n]);
+  }
+  for (n in 1:N) {
+    // apply the inverse link function
+    theta[n] = inv_logit(theta[n]);
+  }
+  // priors including all constants
+  target += normal_lpdf(b_circSD[1] | 3.8, 0.5);
+  target += normal_lpdf(b_circSD[2] | 0, 0.5);
+  target += normal_lpdf(b_theta[1] | 0, 1.5);
+  target += normal_lpdf(b_theta[2] | 0, 1.5);
+  target += normal_lpdf(sd_1[1] | 0, 0.5)
+    - 1 * normal_lccdf(0 | 0, 0.5);
+  target += normal_lpdf(sd_1[2] | 0, 0.5)
+    - 1 * normal_lccdf(0 | 0, 0.5);
+  target += normal_lpdf(z_1[1] | 0, 1);
+  target += normal_lpdf(z_1[2] | 0, 1);
+  target += normal_lpdf(sd_2[1] | 0, 1)
+    - 1 * normal_lccdf(0 | 0, 1);
+  target += normal_lpdf(sd_2[2] | 0, 1)
+    - 1 * normal_lccdf(0 | 0, 1);
+  target += normal_lpdf(z_2[1] | 0, 1);
+  target += normal_lpdf(z_2[2] | 0, 1);
+  // likelihood including all constants
+  if (!prior_only) {
+    for (n in 1:N) {
+      target += vm_uniform_mix_lpdf(Y[n] | mu[n], circSD[n], theta[n], a, b);
+    }
+  }
+}
+generated quantities {
+}
+

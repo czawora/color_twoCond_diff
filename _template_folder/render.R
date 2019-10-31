@@ -42,6 +42,21 @@ prior_check_param_list <- list(
 render(glue("{common_dir}/prior_predictive_check.Rmd"),
       output_dir = glue("{model_dir}/prior_predictive_check"),
       params = prior_check_param_list)
+
+
+###########################################
+# knit sim model fit markdown file
+
+sim_fitting_param_list <- list(
+  
+  model_dir_str = model_dir,
+  common_dir_str = common_dir,
+  save_dir_str = glue("{model_dir}/model_fitting_sim") 
+)
+
+render(glue("{common_dir}/sim_fit.Rmd"),
+       output_dir = glue("{model_dir}/model_fitting_sim"),
+       params = sim_fitting_param_list)
       
 
 ##########################################

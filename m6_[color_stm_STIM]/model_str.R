@@ -110,13 +110,13 @@ WAIC diffs were not very large and had non-neglible SE. Also inconclusive.
 
 waic diff ordering:
 
-## fit_DpMem_null      
+-fit_DpMem_null      
 
-## fit_DcircSD_DpMem_null 
+-fit_DcircSD_DpMem_null 
 
-## fit_full               
+-fit_full               
 
-## fit_DcircSD_null
+-fit_DcircSD_null
 
 fit_DpMem_null predicted best since it omits the difference parameter on pMem, for which there seems little evidence of an effect.
 

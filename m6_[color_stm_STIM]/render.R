@@ -8,6 +8,7 @@ model_dir <- "/Users/zaworaca/Desktop/Desktop/zane/color_twoCond_diff/m6_[color_
 # load math model str
 source(glue("{model_dir}/model_str.R"))
 
+###########################################
 # knit math_model markdown file
 render(glue("{common_dir}/math_model.Rmd"), 
        output_dir = model_dir,
@@ -16,6 +17,7 @@ render(glue("{common_dir}/math_model.Rmd"),
        ))
 
 
+###########################################
 # knit prior_predictive_check markdown file
 prior_check_param_list <- list(
   
@@ -39,7 +41,22 @@ render(glue("{common_dir}/prior_predictive_check.Rmd"),
       params = prior_check_param_list)
       
 
+###########################################
+# knit sim model fit markdown file
 
+sim_fitting_param_list <- list(
+  
+  model_dir_str = model_dir,
+  common_dir_str = common_dir,
+  save_dir_str = glue("{model_dir}/model_fitting_sim") 
+)
+
+render(glue("{common_dir}/sim_fit.Rmd"),
+       output_dir = glue("{model_dir}/model_fitting_sim"),
+       params = sim_fitting_param_list)
+
+
+###########################################
 # knit model_fitting markdown file
 model_fitting_param_list <- list(
   
@@ -58,7 +75,7 @@ render(glue("{common_dir}/model_fitting.Rmd"),
 
 
 
-
+###########################################
 # knit loo markdown file
 loo_param_list <- list(
   

@@ -132,9 +132,9 @@ if (load_existing_sim == FALSE || found_existing_sim == FALSE){
 
   print("simulating")
   
-  nsim_datasets <- 1500
+  nsim_datasets <- 2000
   nsubj_sim <- 15
-  nobs_per_cond_sim <- 800
+  nobs_per_cond_sim <- 1500
 
   # this generates a data frame with one column for each group level variable that is sampled
   # it also contains a simulation index (sim_num), number of subjects to simulate in each dataset,
