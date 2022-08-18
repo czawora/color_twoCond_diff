@@ -20,7 +20,7 @@ To determine if treatment of the medial temporal lobe, either electrical or surg
 
 The models used in this analysis are Bayesian and modeling was performed with a Bayesian [workflow](https://arxiv.org/pdf/2011.01808.pdf) in mind.
 
-Specifically, Bayesian hierarchical mixture models are used with this data. Through an iterative process, models were fit and refined, mostly through the adjustment of priors to exclude extreme values prior to model fitting. The progression of model development is documented in `model_expansion_notes.*` files.
+Specifically, Bayesian hierarchical mixture models are used with this data. Through an iterative process, models were fit and refined, mostly through the adjustment of priors to exclude extreme values prior to model fitting. The progression of model development is documented in `model_expansion_notes.*` files. Models were specified and fit using the [`brms`](https://paul-buerkner.github.io/brms/) R package.
 
 A full mathematical description of each model can be found in each model folders math model file (`m*/math_model.html` or `model_stash/m*/math_model.html`).
 
