@@ -31,11 +31,11 @@ Each likelihood parameter was, in turn, modeled linearly as a function of two pa
 Model iteration proceeded with a prior predictive check, posterior fit and summary. In the case of this analysis, the overall model structure remained the same and model priors were adjusted to reasonable values. Each model iteration also includes a leave-one-out (loo) cross validation that compares nested models to examine the importance of the treatment effect parameter.
 
 To see an example of the model iteration steps, see the following folders in model interation 4 (m4):
-* (data summary)[https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/data_summary/data_summary.html]
-* (prior predictive check)[https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/prior_predictive_check/prior_predictive_check.html]
-* (model fitting on simulated data)[https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/model_fitting_sim/sim_fit.html]
-* (model fitting on actual data)[https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/model_fitting_actual/model_fitting.html]
-* (leave-one-out cross validation model comparison)[https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/loo/loo.html]
+* [data summary](https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/data_summary/data_summary.html)
+* [prior predictive check](https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/prior_predictive_check/prior_predictive_check.html)
+* [model fitting on simulated data](https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/model_fitting_sim/sim_fit.html)
+* [model fitting on actual data](https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/model_fitting_actual/model_fitting.html)
+* [leave-one-out cross validation model comparison](https://czawora.github.io/color_twoCond_diff/m4_%5Bcolor_stm_STIM%5D/loo/loo.html)
 
 #### Results
 
