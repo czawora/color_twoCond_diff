@@ -2,7 +2,7 @@
 
 ## Repo summary
 
-The analyses contained in this repository were performed for a collaborator in an NIH study examining the effect of disruptions of the medial temporal lobe on working memory. See `manuscript.pdf` for a fuller description of the study and experimental set up.
+The analyses contained in this repository were performed for a collaborator in an NIH study examining the effect of disruptions of the medial temporal lobe on working memory. See [`manuscript.pdf`](https://czawora.github.io/color_twocond_diff/manuscript.pdf) for a fuller description of the study and experimental set up.
 
 #### Data Generation
 
